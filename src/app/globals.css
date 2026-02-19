@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
 :root {
   --background: #ffffff;
@@ -19,8 +20,58 @@
   }
 }
 
+html,
+body {
+  scrollbar-gutter: stable;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), "Segoe UI", Arial, Helvetica, sans-serif;
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+@supports not (scrollbar-gutter: stable) {
+  body {
+    overflow-y: scroll;
+  }
+}
+
+/* Radix (react-remove-scroll) adds scrollbar compensation on lock.
+   We already reserve gutter space globally, so this compensation causes
+   layout width jumps when dialogs open/close. */
+html body.with-scroll-bars-hidden {
+  overflow-y: scroll !important;
+  padding-right: 0 !important;
+  margin-right: 0 !important;
+}
+
+html body[data-scroll-locked] {
+  overflow-y: scroll !important;
+  padding-right: 0 !important;
+  margin-right: 0 !important;
+}
+
+html .right-scroll-bar-position {
+  right: 0 !important;
+}
+
+html .width-before-scroll-bar {
+  margin-right: 0 !important;
+}
+
+/* Force single-sided gutter (right only in LTR) to avoid permanent left strip. */
+html,
+body {
+  scrollbar-gutter: stable !important;
+}
+
+/* Final lock override (higher specificity) to prevent layout shifts in modal open/close. */
+html body.with-scroll-bars-hidden.with-scroll-bars-hidden,
+html body[data-scroll-locked][data-scroll-locked] {
+  overflow-y: scroll !important;
+  padding-right: 0 !important;
+  margin-right: 0 !important;
 }

@@ -1,0 +1,154 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "binary"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum TaskStatus {
+  created
+  in_progress
+  done
+  failed
+  stopped
+  paused
+}
+
+enum ImmediateActionType {
+  force_stop
+}
+
+enum ImmediateActionStatus {
+  pending
+  acknowledged
+  executed
+  failed
+}
+
+model Project {
+  id                       String       @id @default(cuid())
+  name                     String
+  path                     String
+  priority                 Int          @default(0)
+  paused                   Boolean      @default(false)
+  metadata                 Json?
+  mainPageTasksVisible     Boolean      @default(true)
+  mainPageSubprojectsVisible Boolean    @default(true)
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
+  subprojects              Subproject[]
+  tasks                    Task[]
+
+  @@index([priority])
+}
+
+model Subproject {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String
+  path      String
+  priority  Int      @default(0)
+  paused    Boolean  @default(false)
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks     Task[]
+
+  @@index([projectId, priority])
+}
+
+model Task {
+  id                      String            @id @default(cuid())
+  projectId               String
+  subprojectId            String?
+  text                    String
+  status                  TaskStatus        @default(created)
+  priority                Int               @default(0)
+  paused                  Boolean           @default(false)
+  editLocked              Boolean           @default(false)
+  includePreviousContext  Boolean           @default(false)
+  previousContextMessages Int               @default(0)
+  showOnMainPage          Boolean           @default(true)
+  model                   String            @default("gpt-5.3-codex")
+  reasoning               String            @default("high")
+  createdAt               DateTime          @default(now())
+  inProgressAt            DateTime?
+  doneAt                  DateTime?
+  failedAt                DateTime?
+  stoppedAt               DateTime?
+  statusUpdatedAt         DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+  project                 Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  subproject              Subproject?       @relation(fields: [subprojectId], references: [id], onDelete: SetNull)
+  executions              TaskExecution[]
+  immediateActions        ImmediateAction[]
+  responses               TaskResponse[]
+  statusUpdates           TaskStatusUpdate[]
+
+  @@index([projectId, priority])
+  @@index([subprojectId, priority])
+  @@index([status, priority])
+}
+
+model TaskStatusUpdate {
+  id             String     @id @default(cuid())
+  createdAt      DateTime   @default(now())
+  idempotencyKey String     @unique
+  status         TaskStatus
+  taskId         String
+  task           Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, createdAt])
+}
+
+model TaskExecution {
+  id          String      @id @default(cuid())
+  taskId       String
+  status       TaskStatus
+  command      String?
+  prompt       String?
+  startedAt    DateTime    @default(now())
+  finishedAt   DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  task         Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  responses    TaskResponse[]
+
+  @@index([taskId, startedAt])
+}
+
+model TaskResponse {
+  id          String         @id @default(cuid())
+  taskId      String
+  executionId String?
+  fullText    String
+  createdAt   DateTime       @default(now())
+  task        Task           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  execution   TaskExecution? @relation(fields: [executionId], references: [id], onDelete: SetNull)
+
+  @@index([taskId, createdAt])
+}
+
+model ImmediateAction {
+  id           String                @id @default(cuid())
+  taskId        String
+  type          ImmediateActionType  @default(force_stop)
+  status        ImmediateActionStatus @default(pending)
+  createdAt     DateTime             @default(now())
+  acknowledgedAt DateTime?
+  executedAt    DateTime?
+  task          Task                 @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([taskId, status])
+}
+
+model Setting {
+  key       String   @id
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

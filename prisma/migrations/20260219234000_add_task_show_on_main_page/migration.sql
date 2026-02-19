@@ -1,0 +1,2 @@
+ALTER TABLE "Task"
+ADD COLUMN "showOnMainPage" BOOLEAN NOT NULL DEFAULT true;
