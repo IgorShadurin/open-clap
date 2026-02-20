@@ -1,6 +1,21 @@
+import { loadPromptTemplate } from "./prompt-templates";
+
 export interface HistoryMessage {
   createdAt: Date;
   text: string;
+}
+
+const PLACEHOLDER_REGEX = /\{\{([a-zA-Z0-9_]+)\}\}/g;
+
+const HISTORY_NOTICE = loadPromptTemplate("prompts/history-context-notice.md");
+const HISTORY_ENTRY_TEMPLATE = loadPromptTemplate("prompts/history-entry-template.md");
+const HISTORY_SEPARATOR = loadPromptTemplate("prompts/history-separator.md");
+
+function renderTemplate(
+  template: string,
+  values: Record<string, string>,
+): string {
+  return template.replaceAll(PLACEHOLDER_REGEX, (_match, key: string) => values[key] ?? "");
 }
 
 export function selectRecentMessages(
@@ -23,10 +38,16 @@ export function buildHistoryBundle(messages: HistoryMessage[]): string {
     return "";
   }
 
-  return messages
+  const renderedMessages = messages
     .map(
       (message, index) =>
-        `Message ${index + 1} (${message.createdAt.toISOString()}):\n${message.text}`,
+        renderTemplate(HISTORY_ENTRY_TEMPLATE, {
+          createdAt: message.createdAt.toISOString(),
+          index: String(index + 1),
+          text: message.text,
+        }),
     )
-    .join("\n\n---\n\n");
+    .join(`\n\n${HISTORY_SEPARATOR}\n\n`);
+
+  return `${HISTORY_NOTICE}\n\n${renderedMessages}`;
 }

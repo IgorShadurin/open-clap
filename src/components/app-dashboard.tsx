@@ -28,6 +28,7 @@ import {
   TASK_MODEL_OPTIONS,
   TASK_REASONING_OPTIONS,
 } from "@/lib/task-reasoning";
+import { clearTaskFormPreferences } from "@/lib/task-form-preferences";
 import { canEditTask, extractApiErrorMessage } from "./app-dashboard-helpers";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -289,7 +290,6 @@ export function AppDashboard() {
         method: "PATCH",
       });
       await reloadTree();
-      showSuccess(project.paused ? "Project resumed" : "Project paused");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to update project");
     }
@@ -331,6 +331,7 @@ export function AppDashboard() {
   const handleProjectDelete = async (projectId: string) => {
     try {
       await requestJson(`/api/projects/${projectId}`, { method: "DELETE" });
+      clearTaskFormPreferences(projectId);
       await loadAll();
       showSuccess("Project removed");
     } catch (error) {
@@ -438,7 +439,6 @@ export function AppDashboard() {
         method: "PATCH",
       });
       await reloadTree();
-      showSuccess(subproject.paused ? "Subproject resumed" : "Subproject paused");
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : "Failed to update subproject",
@@ -493,7 +493,9 @@ export function AppDashboard() {
         method: "POST",
       });
       await reloadTree();
-      showSuccess(`Task action applied: ${action}`);
+      if (action !== "pause" && action !== "resume") {
+        showSuccess(`Task action applied: ${action}`);
+      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to update task action");
     }
@@ -1094,11 +1096,17 @@ export function AppDashboard() {
                   </option>
                 ))}
               </Select>
-              <Input
-                onChange={(event) => setEditTaskReasoning(event.target.value)}
-                placeholder="Reasoning"
-                value={editTaskReasoning}
-              />
+              <Select onChange={(event) => setEditTaskReasoning(event.target.value)} value={editTaskReasoning}>
+                {!TASK_REASONING_OPTIONS.some((option) => option.value === editTaskReasoning) &&
+                editTaskReasoning.trim().length > 0 ? (
+                  <option value={editTaskReasoning}>{editTaskReasoning}</option>
+                ) : null}
+                {TASK_REASONING_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
             </div>
           </div>
           <DialogFooter>

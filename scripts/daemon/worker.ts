@@ -1,4 +1,5 @@
 import type { DaemonTask, TaskExecutionResult } from "../../shared/contracts/task";
+import { loadPromptTemplate } from "../../src/lib/prompt-templates";
 import {
   renderTaskPrompt,
   type WorkerTemplates,
@@ -8,8 +9,9 @@ import { spawn } from "node:child_process";
 
 const PLACEHOLDER_REGEX = /\{\{([a-zA-Z0-9_]+)\}\}/g;
 
-const DEFAULT_CODEX_COMMAND_TEMPLATE =
-  'codex exec -C "{{contextPath}}" --model "{{model}}" "{{message}}\n\nReasoning: {{reasoning}}"';
+const DEFAULT_CODEX_COMMAND_TEMPLATE = loadPromptTemplate(
+  "prompts/codex-command-template.md",
+);
 
 export interface WorkerExecutionContext {
   auditLogger?: TaskAuditLogger;

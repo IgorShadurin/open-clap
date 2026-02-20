@@ -31,9 +31,11 @@ model Project {
   id                       String       @id @default(cuid())
   name                     String
   path                     String
+  iconPath                 String?
   priority                 Int          @default(0)
   paused                   Boolean      @default(false)
   metadata                 Json?
+  mainPageCollapsed        Boolean      @default(false)
   mainPageTasksVisible     Boolean      @default(true)
   mainPageSubprojectsVisible Boolean    @default(true)
   createdAt                DateTime     @default(now())

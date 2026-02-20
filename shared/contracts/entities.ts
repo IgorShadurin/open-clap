@@ -5,6 +5,8 @@ export type PathSortMode = "modified" | "name";
 export interface ProjectEntity {
   createdAt: string;
   id: string;
+  iconPath: string | null;
+  mainPageCollapsed: boolean;
   mainPageSubprojectsVisible: boolean;
   mainPageTasksVisible: boolean;
   metadata: string | null;

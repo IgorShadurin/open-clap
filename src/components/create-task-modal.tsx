@@ -28,7 +28,7 @@ import { Select } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 
 const INCLUDE_CONTEXT_HELP =
-  "If enabled, the daemon includes previous task responses from this same scope. Use the number field to control how many previous messages are added.";
+  "If enabled, the daemon includes previous task texts from this same scope. Use the number field to control how many previous tasks are added.";
 
 interface CreateTaskModalProps {
   onCreated: () => Promise<void> | void;

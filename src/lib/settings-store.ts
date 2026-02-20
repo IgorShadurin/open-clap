@@ -9,6 +9,9 @@ import { prisma } from "./prisma";
 const EDITABLE_KEYS = new Set([
   "codex_command_template",
   "daemon_max_parallel_tasks",
+  "codex_usage_auth_file",
+  "codex_usage_proxy_enabled",
+  "codex_usage_proxy_url",
   "default_project_base_path",
   "project_path_sort_mode",
   "task_message_template",

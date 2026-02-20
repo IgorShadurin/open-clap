@@ -11,6 +11,7 @@ import { prisma } from "../../src/lib/prisma";
 
 interface ProjectTreeRow {
   id: string;
+  mainPageCollapsed: boolean;
   mainPageSubprojectsVisible: boolean;
   mainPageTasksVisible: boolean;
 }
@@ -34,6 +35,7 @@ test("project main page visibility toggles persist as project fields", async () 
 
   const project = await prisma.project.create({
     data: {
+      mainPageCollapsed: false,
       mainPageSubprojectsVisible: true,
       mainPageTasksVisible: true,
       name: "Metadata Toggle Project",
@@ -46,6 +48,7 @@ test("project main page visibility toggles persist as project fields", async () 
   const patchResponse = await projectPatch(
     new Request(`http://localhost/api/projects/${project.id}`, {
       body: JSON.stringify({
+        mainPageCollapsed: true,
         mainPageSubprojectsVisible: false,
         mainPageTasksVisible: false,
       }),
@@ -62,6 +65,7 @@ test("project main page visibility toggles persist as project fields", async () 
   const rows = (await treeResponse.json()) as ProjectTreeRow[];
   const row = rows.find((item) => item.id === project.id);
   assert.ok(row);
+  assert.equal(row.mainPageCollapsed, true);
   assert.equal(row.mainPageSubprojectsVisible, false);
   assert.equal(row.mainPageTasksVisible, false);
 });

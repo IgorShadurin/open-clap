@@ -37,8 +37,7 @@ logs/daemon/**/*.log
 !example.env
 
 # local sqlite databases
-data/*.sqlite
-data/*.sqlite-*
+data/
 
 # vercel
 .vercel

@@ -10,6 +10,7 @@ import { createTaskAuditLogger, resolveDaemonLogFilePath } from "./task-audit-lo
 import { pathToFileURL } from "node:url";
 import { initializeDotenv } from "../../src/lib/settings";
 import type { DaemonRuntimeSettings } from "../../shared/contracts";
+import type { SettingMap } from "../../src/lib/settings";
 
 export interface DaemonRuntime {
   poller: { start(): void; stop(): void };
@@ -58,9 +59,6 @@ export function startDaemon(): DaemonRuntime {
     `Daemon started (maxParallel=${config.maxParallelTasks}, pollIntervalMs=${config.pollIntervalMs}, api=${apiBaseUrl ? apiBaseUrl : "noop"})`,
   );
   logger.log("info", `Daemon command log file: ${logFilePath}`);
-  for (const warning of config.codexCommandTemplateWarnings) {
-    logger.log("info", `Codex command template normalized: ${warning}`);
-  }
   taskAuditLogger.log("meta", "Daemon started", {
     apiBaseUrl: apiBaseUrl ?? "noop",
     codexCommandTemplateWarnings: config.codexCommandTemplateWarnings,
@@ -73,9 +71,15 @@ export function startDaemon(): DaemonRuntime {
     settings: DaemonRuntimeSettings,
     revision: string,
   ): void => {
+    const settingsMap: SettingMap = {
+      codex_command_template: settings.codex_command_template,
+      daemon_max_parallel_tasks: settings.daemon_max_parallel_tasks,
+      task_message_template: settings.task_message_template,
+      task_message_template_with_history: settings.task_message_template_with_history,
+    };
     const nextConfig = loadDaemonConfig({
       env: process.env,
-      settings,
+      settings: settingsMap,
     });
     const changedKeys: string[] = [];
     if (config.codexCommandTemplate !== nextConfig.codexCommandTemplate) {
@@ -94,10 +98,6 @@ export function startDaemon(): DaemonRuntime {
     config = nextConfig;
     scheduler.setMaxParallelTasks(config.maxParallelTasks);
     settingsRevision = revision;
-
-    for (const warning of config.codexCommandTemplateWarnings) {
-      logger.log("info", `Codex command template normalized: ${warning}`);
-    }
 
     logger.log(
       "info",

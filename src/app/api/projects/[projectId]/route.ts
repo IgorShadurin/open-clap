@@ -5,6 +5,7 @@ import { createApiError } from "../../../../lib/api-error";
 import { deleteProject, updateProject } from "../../../../lib/entities-service";
 
 interface UpdateProjectBody {
+  mainPageCollapsed?: boolean;
   mainPageSubprojectsVisible?: boolean;
   mainPageTasksVisible?: boolean;
   metadata?: string;

@@ -51,6 +51,24 @@ test("validateSettingValue validates required template placeholders", async () =
   );
 });
 
+test("validateSettingValue enforces codex_usage_proxy_enabled as boolean string", async () => {
+  await assert.rejects(
+    async () =>
+      validateSettingValue("codex_usage_proxy_enabled", "yes", {
+        validatePath: okPathValidator,
+      }),
+    /must be either `true` or `false`/,
+  );
+});
+
+test("validateSettingValue allows empty codex_usage_proxy_url", async () => {
+  await validateSettingValue("codex_usage_proxy_url", "", {
+    validatePath: okPathValidator,
+  });
+
+  assert.ok(true);
+});
+
 test("validateSettingValue accepts valid template settings", async () => {
   await validateSettingValue(
     "task_message_template_with_history",

@@ -22,6 +22,7 @@ import {
   DEFAULT_TASK_MODEL,
   DEFAULT_TASK_REASONING,
   TASK_MODEL_OPTIONS,
+  TASK_REASONING_OPTIONS,
 } from "@/lib/task-reasoning";
 
 import type { ProjectEntity, SubprojectEntity, TaskEntity } from "../../shared/contracts";
@@ -31,6 +32,7 @@ import {
   type SubprojectQuickAddPayload,
 } from "./subproject-quick-add";
 import { TaskQuickAdd, type TaskQuickAddPayload } from "./task-quick-add";
+import { usePreventUnhandledFileDrop } from "./use-prevent-unhandled-file-drop";
 import { useRealtimeSync } from "./use-realtime-sync";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -43,7 +45,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "./ui/dialog";
-import { Input } from "./ui/input";
 import { Select } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 
@@ -118,6 +119,8 @@ function getSubprojectScopeId(subprojectId: string): string {
 }
 
 export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
+  usePreventUnhandledFileDrop();
+
   const [projects, setProjects] = useState<ProjectTree[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -222,7 +225,9 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
         method: "POST",
       });
       await loadTree();
-      toast.success(`Task action applied: ${action}`);
+      if (action !== "pause" && action !== "resume") {
+        toast.success(`Task action applied: ${action}`);
+      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to update task action");
     }
@@ -309,7 +314,6 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
         method: "PATCH",
       });
       await loadTree();
-      toast.success(nextPaused ? "Project paused" : "Project resumed");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to update project state");
     }
@@ -326,7 +330,6 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
         method: "PATCH",
       });
       await loadTree();
-      toast.success(nextPaused ? "Subproject paused" : "Subproject resumed");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to update subproject state");
     }
@@ -509,11 +512,9 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
             type="button"
           >
             {failed ? (
-              <AlertCircle
-                aria-label="Task failed"
-                className="h-4 w-4 text-red-600"
-                title="Task failed"
-              />
+              <span aria-label="Task failed" title="Task failed">
+                <AlertCircle className="h-4 w-4 text-red-600" />
+              </span>
             ) : null}
             <span
               className={`${
@@ -693,7 +694,7 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
 
               return (
                 <div
-                  className="rounded border border-black/10 bg-white transition-colors"
+                  className="rounded border border-zinc-300/80 bg-zinc-50/70 transition-colors"
                   draggable
                   id={`subproject-${subproject.id}`}
                   key={subproject.id}
@@ -702,7 +703,7 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
                   onDragStart={() => setDraggingSubprojectId(subproject.id)}
                   onDrop={() => void handleSubprojectDrop(subproject.id)}
                 >
-                  <div className="flex items-center gap-2 px-3 py-2">
+                  <div className="flex items-center gap-2 rounded-t bg-zinc-100/70 px-3 py-2">
                     <GripVertical className="h-4 w-4 text-zinc-400" />
                     <Button
                       aria-label={subproject.paused ? "Resume subproject" : "Pause subproject"}
@@ -755,6 +756,7 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
                       <TaskQuickAdd
                         onSubmit={(payload) => handleQuickTaskCreate(payload, subproject.id)}
                         placeholder={`Add task to ${subproject.name}`}
+                        projectId={selectedProject.id}
                         stopPropagation
                         submitAriaLabel={`Add task to ${subproject.name}`}
                         submitTitle={`Add task to ${subproject.name}`}
@@ -785,6 +787,7 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
             <TaskQuickAdd
               onSubmit={(payload) => handleQuickTaskCreate(payload, null)}
               placeholder="Add task"
+              projectId={selectedProject.id}
               submitAriaLabel={`Add task to ${selectedProject.name}`}
               submitTitle={`Add task to ${selectedProject.name}`}
             />
@@ -821,7 +824,7 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
         }}
         open={Boolean(deleteTaskTarget)}
       >
-        <DialogContent>
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Delete Task</DialogTitle>
             <DialogDescription>
@@ -876,11 +879,20 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
                   </option>
                 ))}
               </Select>
-              <Input
+              <Select
                 onChange={(event) => setEditTaskReasoning(event.target.value)}
-                placeholder="Reasoning"
                 value={editTaskReasoning}
-              />
+              >
+                {!TASK_REASONING_OPTIONS.some((option) => option.value === editTaskReasoning) &&
+                editTaskReasoning.trim().length > 0 ? (
+                  <option value={editTaskReasoning}>{editTaskReasoning}</option>
+                ) : null}
+                {TASK_REASONING_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
             </div>
           </div>
           <DialogFooter>

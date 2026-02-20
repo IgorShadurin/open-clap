@@ -2,14 +2,26 @@
 
 import { Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import type { DragEvent, KeyboardEvent } from "react";
 
 import {
+  extractDroppedImagePaths,
+  hasImagePathDataTransfer,
+  isAbsoluteFilePath,
+} from "@/lib/file-drop";
+import {
   DEFAULT_TASK_MODEL,
-  TASK_MODEL_OPTIONS,
   DEFAULT_TASK_REASONING,
+  TASK_MODEL_OPTIONS,
   TASK_REASONING_OPTIONS,
 } from "@/lib/task-reasoning";
+import { cn } from "@/lib/utils";
+import {
+  loadTaskFormPreferences,
+  type TaskFormPreferencesUpdatedEventDetail,
+  saveTaskFormPreferences,
+  TASK_FORM_PREFERENCES_UPDATED_EVENT,
+} from "@/lib/task-form-preferences";
 
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
@@ -27,14 +39,21 @@ export interface TaskQuickAddPayload {
 interface TaskQuickAddProps {
   onSubmit: (payload: TaskQuickAddPayload) => Promise<void> | void;
   placeholder: string;
+  projectId: string;
   stopPropagation?: boolean;
   submitAriaLabel: string;
   submitTitle: string;
 }
 
+const IMAGE_FILE_NAME_PATTERN =
+  /\.(apng|avif|bmp|gif|heic|heif|jpe?g|png|svg|tiff?|webp)$/i;
+
+type BrowserDroppedFile = File & { path?: string; webkitRelativePath?: string };
+
 export function TaskQuickAdd({
   onSubmit,
   placeholder,
+  projectId,
   stopPropagation = false,
   submitAriaLabel,
   submitTitle,
@@ -42,11 +61,16 @@ export function TaskQuickAdd({
   const [text, setText] = useState("");
   const [model, setModel] = useState(DEFAULT_TASK_MODEL);
   const [reasoning, setReasoning] = useState(DEFAULT_TASK_REASONING);
+  const [fileDropReady, setFileDropReady] = useState(false);
   const [includeContext, setIncludeContext] = useState(false);
   const [contextCount, setContextCount] = useState(0);
   const [settingsExpanded, setSettingsExpanded] = useState(false);
+  const [preferencesLoadedProjectId, setPreferencesLoadedProjectId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [dropError, setDropError] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const fileDropDepthRef = useRef(0);
 
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
@@ -68,13 +92,57 @@ export function TaskQuickAdd({
     };
   }, []);
 
+  useEffect(() => {
+    const saved = loadTaskFormPreferences(projectId);
+    setModel(saved.model);
+    setReasoning(saved.reasoning);
+    setIncludeContext(saved.includeContext);
+    setContextCount(saved.contextCount);
+    setPreferencesLoadedProjectId(projectId);
+  }, [projectId]);
+
+  useEffect(() => {
+    const handlePreferencesUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<TaskFormPreferencesUpdatedEventDetail>).detail;
+      if (!detail) {
+        return;
+      }
+      if (detail.projectId !== projectId) {
+        return;
+      }
+
+      const preferences = detail.preferences;
+      setModel(preferences.model);
+      setReasoning(preferences.reasoning);
+      setIncludeContext(preferences.includeContext);
+      setContextCount(preferences.contextCount);
+    };
+
+    window.addEventListener(TASK_FORM_PREFERENCES_UPDATED_EVENT, handlePreferencesUpdated);
+    return () => {
+      window.removeEventListener(TASK_FORM_PREFERENCES_UPDATED_EVENT, handlePreferencesUpdated);
+    };
+  }, [projectId]);
+
+  useEffect(() => {
+    if (preferencesLoadedProjectId !== projectId) {
+      return;
+    }
+
+    saveTaskFormPreferences(projectId, {
+      contextCount,
+      includeContext,
+      model,
+      reasoning,
+    });
+  }, [contextCount, includeContext, model, preferencesLoadedProjectId, projectId, reasoning]);
+
   const reset = () => {
     setText("");
-    setModel(DEFAULT_TASK_MODEL);
-    setReasoning(DEFAULT_TASK_REASONING);
-    setIncludeContext(false);
-    setContextCount(0);
     setSettingsExpanded(false);
+    setFileDropReady(false);
+    setDropError(null);
+    fileDropDepthRef.current = 0;
   };
 
   const stopEventPropagation = <T extends { stopPropagation: () => void }>(event: T) => {
@@ -91,6 +159,204 @@ export function TaskQuickAdd({
     if (stopPropagation) {
       event.stopPropagation();
     }
+  };
+
+  const setFileDropActive = (active: boolean) => {
+    setFileDropReady(active);
+    if (active) {
+      setSettingsExpanded(true);
+    }
+  };
+
+  const stopFileDropEvent = (event: {
+    preventDefault: () => void;
+    stopPropagation: () => void;
+  }) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const getNextAttachmentIndex = (currentText: string): number => {
+    const pattern = /\[Atteched image #(\d+): [^\]]+\]/g;
+    let maxIndex = 0;
+    let match = pattern.exec(currentText);
+
+    while (match) {
+      const parsed = Number.parseInt(match[1], 10);
+      if (Number.isFinite(parsed)) {
+        maxIndex = Math.max(maxIndex, parsed);
+      }
+      match = pattern.exec(currentText);
+    }
+
+    return maxIndex + 1;
+  };
+
+  const appendDroppedPaths = (currentText: string, droppedPaths: string[]): string => {
+    if (droppedPaths.length < 1) {
+      return currentText;
+    }
+
+    let nextIndex = getNextAttachmentIndex(currentText);
+    const attachmentLines = droppedPaths.map((path) => {
+      const line = `[Atteched image #${nextIndex}: ${path}] `;
+      nextIndex += 1;
+      return line;
+    });
+
+    if (currentText.trim().length < 1) {
+      return attachmentLines.join("\n");
+    }
+
+    return `${currentText.trimEnd()}\n${attachmentLines.join("\n")}`;
+  };
+
+  const normalizeDroppedPath = (value: string | null | undefined): string | null => {
+    const trimmed = value?.trim();
+    if (!trimmed || trimmed.length < 1 || !isAbsoluteFilePath(trimmed)) {
+      return null;
+    }
+
+    return trimmed;
+  };
+
+  const isImageDropFile = (file: File): boolean => {
+    return file.type.toLowerCase().startsWith("image/") || IMAGE_FILE_NAME_PATTERN.test(file.name);
+  };
+
+  const getPathBaseName = (value: string): string => {
+    const segments = value.split(/[\\/]/u);
+    return segments[segments.length - 1] ?? value;
+  };
+
+  const uploadDroppedImageFiles = async (files: File[]): Promise<string[]> => {
+    if (files.length < 1) {
+      return [];
+    }
+
+    const formData = new FormData();
+    for (const file of files) {
+      formData.append("files", file);
+    }
+
+    const response = await fetch("/api/attachments/upload", {
+      body: formData,
+      method: "POST",
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || `Attachment upload failed with HTTP ${response.status}`);
+    }
+
+    const payload = (await response.json()) as { paths?: string[] };
+    if (!Array.isArray(payload.paths)) {
+      throw new Error("Attachment upload response does not include `paths`");
+    }
+
+    return payload.paths.filter((path) => typeof path === "string" && path.trim().length > 0);
+  };
+
+  const handleFileDragEnter = (event: DragEvent<HTMLFormElement>) => {
+    if (!hasImagePathDataTransfer(event.dataTransfer)) {
+      return;
+    }
+
+    stopFileDropEvent(event);
+    fileDropDepthRef.current += 1;
+    setFileDropActive(true);
+  };
+
+  const handleFileDragLeave = (event: DragEvent<HTMLFormElement>) => {
+    if (!hasImagePathDataTransfer(event.dataTransfer)) {
+      return;
+    }
+
+    stopFileDropEvent(event);
+    fileDropDepthRef.current = Math.max(0, fileDropDepthRef.current - 1);
+    if (fileDropDepthRef.current === 0) {
+      setFileDropActive(false);
+    }
+  };
+
+  const handleFileDragOver = (event: DragEvent<HTMLFormElement>) => {
+    if (!hasImagePathDataTransfer(event.dataTransfer)) {
+      return;
+    }
+
+    stopFileDropEvent(event);
+    event.dataTransfer.dropEffect = "copy";
+    setFileDropActive(true);
+  };
+
+  const handleFileDrop = async (event: DragEvent<HTMLFormElement>) => {
+    stopFileDropEvent(event);
+    fileDropDepthRef.current = 0;
+    setFileDropActive(false);
+    setDropError(null);
+
+    const transferPaths = extractDroppedImagePaths(event.dataTransfer)
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+    const droppedImageFiles = Array.from(event.dataTransfer.files).filter((file) =>
+      isImageDropFile(file),
+    );
+
+    const attachmentPaths: string[] = [];
+    const seenPaths = new Set<string>();
+    for (const path of transferPaths) {
+      if (!seenPaths.has(path)) {
+        attachmentPaths.push(path);
+        seenPaths.add(path);
+      }
+    }
+
+    const resolvedByName = new Set(
+      attachmentPaths.map((path) => getPathBaseName(path).toLowerCase()),
+    );
+    const filesToUpload: File[] = [];
+
+    for (const file of droppedImageFiles) {
+      const pathFromFile = normalizeDroppedPath((file as BrowserDroppedFile).path);
+      if (pathFromFile) {
+        if (!seenPaths.has(pathFromFile)) {
+          attachmentPaths.push(pathFromFile);
+          seenPaths.add(pathFromFile);
+          resolvedByName.add(getPathBaseName(pathFromFile).toLowerCase());
+        }
+        continue;
+      }
+
+      if (resolvedByName.has(file.name.toLowerCase())) {
+        continue;
+      }
+
+      filesToUpload.push(file);
+    }
+
+    if (filesToUpload.length > 0) {
+      try {
+        const uploadedPaths = await uploadDroppedImageFiles(filesToUpload);
+        for (const uploadedPath of uploadedPaths) {
+          const normalized = uploadedPath.trim();
+          if (normalized.length < 1 || seenPaths.has(normalized)) {
+            continue;
+          }
+          attachmentPaths.push(normalized);
+          seenPaths.add(normalized);
+        }
+      } catch (error) {
+        setDropError(error instanceof Error ? error.message : "Attachment upload failed");
+      }
+    }
+
+    if (attachmentPaths.length < 1) {
+      setDropError((current) => current ?? "Unable to resolve a dropped image path");
+      return;
+    }
+
+    setText((current) => appendDroppedPaths(current, attachmentPaths));
+    inputRef.current?.focus();
   };
 
   const handleSubmit = async () => {
@@ -127,10 +393,25 @@ export function TaskQuickAdd({
     void handleSubmit();
   };
 
+  const handleContextCountChange = (value: string) => {
+    const nextCount = Number.parseInt(value, 10);
+    setContextCount(Number.isFinite(nextCount) ? Math.max(0, nextCount) : 0);
+  };
+
   return (
     <form
-      className="relative rounded-md border border-black/10 bg-white px-3 py-2"
+      className={cn(
+        "relative rounded-md border border-black/10 bg-white px-3 py-2",
+        fileDropReady ? "border-emerald-400 bg-emerald-50/40" : undefined,
+      )}
+      data-task-file-drop="true"
       ref={formRef}
+      onDragEnter={handleFileDragEnter}
+      onDragLeave={handleFileDragLeave}
+      onDragOver={handleFileDragOver}
+      onDrop={(event) => {
+        void handleFileDrop(event);
+      }}
       onMouseDown={stopEventPropagation}
       onPointerDown={stopEventPropagation}
       onSubmit={(event) => {
@@ -140,11 +421,16 @@ export function TaskQuickAdd({
     >
       <div className="flex items-center gap-2">
         <Input
-          className="h-9 text-sm"
+          className={cn(
+            "h-9 text-sm",
+            fileDropReady ? "border-emerald-400 bg-emerald-50 ring-1 ring-emerald-200" : undefined,
+          )}
+          data-task-file-drop="true"
           onChange={(event) => setText(event.target.value)}
           onFocus={() => setSettingsExpanded(true)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
+          ref={inputRef}
           value={text}
         />
         <Button
@@ -161,6 +447,16 @@ export function TaskQuickAdd({
           <Send className="h-4 w-4" />
         </Button>
       </div>
+      {fileDropReady ? (
+        <div className="mt-2 rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs text-emerald-800">
+          Release to attach screenshot path
+        </div>
+      ) : null}
+      {dropError ? (
+        <div className="mt-2 rounded-md border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-800">
+          {dropError}
+        </div>
+      ) : null}
       {settingsExpanded ? (
         <div className="absolute left-0 right-0 top-full z-20 mt-2 grid grid-cols-1 gap-2 rounded-md border border-black/15 bg-white p-2 shadow-lg md:grid-cols-4">
           <Select
@@ -201,7 +497,7 @@ export function TaskQuickAdd({
             className="h-9 text-sm"
             disabled={!includeContext}
             min={0}
-            onChange={(event) => setContextCount(Number.parseInt(event.target.value || "0", 10))}
+            onChange={(event) => handleContextCountChange(event.target.value)}
             onFocus={() => setSettingsExpanded(true)}
             placeholder="Messages count"
             type="number"

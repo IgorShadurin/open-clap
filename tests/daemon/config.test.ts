@@ -44,6 +44,10 @@ test("loadDaemonConfig normalizes legacy codex template flags", () => {
   assert.equal(config.codexCommandTemplate.includes("codex exec"), true);
   assert.equal(config.codexCommandTemplate.includes("--cd"), true);
   assert.equal(config.codexCommandTemplate.includes("--reasoning"), false);
-  assert.equal(config.codexCommandTemplate.includes("Reasoning: {{reasoning}}"), true);
+  assert.equal(
+    config.codexCommandTemplate.includes('-c model_reasoning_effort="{{reasoning}}"'),
+    true,
+  );
+  assert.equal(config.codexCommandTemplate.includes("Reasoning: {{reasoning}}"), false);
   assert.equal(config.codexCommandTemplateWarnings.length >= 1, true);
 });

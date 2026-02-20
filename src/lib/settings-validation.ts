@@ -31,7 +31,9 @@ export async function validateSettingValue(
   value: string,
   options: SettingValidationOptions,
 ): Promise<void> {
-  if (!value || value.trim().length < 1) {
+  const normalizedValue = value.trim();
+
+  if (key !== "codex_usage_proxy_url" && normalizedValue.length < 1) {
     throw new Error(`Setting \`${key}\` requires a non-empty value`);
   }
 
@@ -45,6 +47,12 @@ export async function validateSettingValue(
   if (key === "project_path_sort_mode") {
     if (value !== "modified" && value !== "name") {
       throw new Error("project_path_sort_mode must be either `modified` or `name`");
+    }
+  }
+
+  if (key === "codex_usage_proxy_enabled") {
+    if (normalizedValue !== "true" && normalizedValue !== "false") {
+      throw new Error("codex_usage_proxy_enabled must be either `true` or `false`");
     }
   }
 

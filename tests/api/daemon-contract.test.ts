@@ -123,6 +123,57 @@ test("daemon claim endpoint returns one task per scope and marks tasks in progre
   assert.equal(claimedTasks.every((task) => task.status === "in_progress"), true);
 });
 
+test("daemon claim history includes only previous task texts, not codex responses", async () => {
+  await resetDatabase();
+
+  const project = await createProject("History Project");
+  const previousTask = await prisma.task.create({
+    data: {
+      doneAt: new Date("2026-02-20T10:00:00.000Z"),
+      projectId: project.id,
+      status: "done",
+      statusUpdatedAt: new Date("2026-02-20T10:00:00.000Z"),
+      text: "previous task text",
+    },
+    select: { id: true },
+  });
+
+  await prisma.taskResponse.create({
+    data: {
+      fullText: "VERY_LONG_CODEX_RESPONSE_SHOULD_NOT_BE_IN_HISTORY",
+      taskId: previousTask.id,
+    },
+  });
+
+  await prisma.task.create({
+    data: {
+      includePreviousContext: true,
+      previousContextMessages: 1,
+      projectId: project.id,
+      text: "new task",
+    },
+  });
+
+  const response = await claimTasksPost(
+    new Request("http://localhost/api/daemon/tasks/claim", {
+      body: JSON.stringify({ limit: 1 }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as {
+    tasks: Array<{ history?: string; text: string }>;
+  };
+
+  assert.equal(payload.tasks.length, 1);
+  assert.equal(payload.tasks[0].text, "new task");
+  assert.ok(payload.tasks[0].history);
+  assert.equal(payload.tasks[0].history.includes("previous task text"), true);
+  assert.equal(payload.tasks[0].history.includes("VERY_LONG_CODEX_RESPONSE_SHOULD_NOT_BE_IN_HISTORY"), false);
+});
+
 test("daemon status endpoint is idempotent when idempotency key is reused", async () => {
   await resetDatabase();
 

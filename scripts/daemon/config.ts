@@ -41,6 +41,7 @@ function normalizeCodexCommandTemplate(
 ): { template: string; warnings: string[] } {
   let normalized = template;
   const warnings: string[] = [];
+  const hadReasoningPlaceholder = normalized.includes("{{reasoning}}");
 
   if (/\bcodex\s+run\b/.test(normalized)) {
     normalized = normalized.replace(/\bcodex\s+run\b/g, "codex exec");
@@ -52,19 +53,22 @@ function normalizeCodexCommandTemplate(
     warnings.push("Replaced unsupported `--cwd` with `--cd`.");
   }
 
-  const reasoningFlagRegex =
-    /\s+--reasoning\s+("|')?\{\{reasoning\}\}\1?/g;
-  if (reasoningFlagRegex.test(normalized)) {
+  const reasoningFlagRegex = /\s+--reasoning\s+("|')?\{\{reasoning\}\}\1?/g;
+  const hasLegacyReasoningFlag = reasoningFlagRegex.test(normalized);
+  if (hasLegacyReasoningFlag) {
     normalized = normalized.replace(reasoningFlagRegex, "");
-    if (!normalized.includes("{{reasoning}}")) {
-      normalized = normalized.replace(
-        "{{message}}",
-        "{{message}}\\n\\nReasoning: {{reasoning}}",
-      );
-    }
-    warnings.push(
-      "Removed unsupported `--reasoning` flag and injected reasoning into message payload.",
-    );
+  }
+
+  const messageReasoningRegex =
+    /(\{\{message\}\})(?:(?:\\n|\\r\\n|\n|\r){2})Reasoning:\s*\{\{reasoning\}\}/g;
+  if (messageReasoningRegex.test(normalized)) {
+    normalized = normalized.replace(messageReasoningRegex, "$1");
+  }
+
+  const hasReasoningConfig =
+    /-c\s+model_reasoning_effort\s*=\s*("|')?\{\{reasoning\}\}\1?/.test(normalized);
+  if (hadReasoningPlaceholder && !hasReasoningConfig) {
+    normalized = `${normalized} -c model_reasoning_effort="{{reasoning}}"`;
   }
 
   return { template: normalized, warnings };

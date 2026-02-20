@@ -10,8 +10,9 @@ export const TASK_MODEL_OPTIONS = [
 ] as const;
 
 export const TASK_REASONING_OPTIONS = [
-  { label: "Low", value: "low" },
-  { label: "Medium (default)", value: "medium" },
-  { label: "High", value: "high" },
-  { label: "Extra high", value: "extra high" },
+  { label: "minimal", value: "minimal" },
+  { label: "low", value: "low" },
+  { label: "medium", value: "medium" },
+  { label: "high", value: "high" },
+  { label: "xhigh", value: "xhigh" },
 ] as const;

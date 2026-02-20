@@ -9,6 +9,7 @@
     "daemon": "tsx scripts/daemon/index.ts",
     "daemon:dev": "tsx watch scripts/daemon/index.ts",
     "daemon:test": "node scripts/run-tests.mjs daemon",
+    "codex:usage": "tsx scripts/codex-usage.ts",
     "lint": "eslint",
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",

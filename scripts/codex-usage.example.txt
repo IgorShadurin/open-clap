@@ -1,0 +1,32 @@
+CLI usage example:
+
+npm run codex:usage -- \
+  --auth-file ~/.codex/auth-primary.json \
+  --auth-file ~/.codex/auth-secondary.json \
+  --proxy 'http://username:password@proxy-host:proxy-port'
+
+Optional endpoint override:
+
+npm run codex:usage -- \
+  --auth-file ~/.codex/auth-primary.json \
+  --proxy 'http://username:password@proxy-host:proxy-port' \
+  --endpoint /backend-api/wham/usage
+
+API method example (local app server):
+
+curl -X POST 'http://localhost:3000/api/codex/usage' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "authFiles": ["/Users/example/.codex/auth-primary.json", "/Users/example/.codex/auth-secondary.json"],
+    "proxy": "http://username:password@proxy-host:proxy-port",
+    "timeoutMs": 25000
+  }'
+
+Single auth file API example:
+
+curl -X POST 'http://localhost:3000/api/codex/usage' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "authFile": "/Users/example/.codex/auth-primary.json",
+    "proxy": "http://username:password@proxy-host:proxy-port"
+  }'

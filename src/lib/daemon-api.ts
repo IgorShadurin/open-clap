@@ -15,8 +15,16 @@ const MIN_FETCH_LIMIT = 1;
 
 type TaskWithContext = Prisma.TaskGetPayload<{
   include: {
-    project: true;
-    subproject: true;
+    project: {
+      select: {
+        path: true;
+      };
+    };
+    subproject: {
+      select: {
+        path: true;
+      };
+    };
   };
 }>;
 
@@ -59,25 +67,26 @@ async function attachPreviousContextHistory(
       continue;
     }
 
-    const responses = await tx.taskResponse.findMany({
-      orderBy: [{ createdAt: "desc" }],
+    const previousTasks = await tx.task.findMany({
+      orderBy: [{ statusUpdatedAt: "desc" }, { createdAt: "desc" }],
       take: Math.floor(task.previousContextMessages),
       where: {
-        taskId: {
+        id: {
           not: task.id,
         },
-        task: {
-          projectId: task.projectId,
-          subprojectId: task.subprojectId ?? null,
+        projectId: task.projectId,
+        status: {
+          in: [TaskStatus.done, TaskStatus.failed, TaskStatus.stopped],
         },
+        subprojectId: task.subprojectId ?? null,
       },
     });
 
     const bundle = buildHistoryBundle(
       selectRecentMessages(
-        responses.map((response) => ({
-          createdAt: response.createdAt,
-          text: response.fullText,
+        previousTasks.map((previousTask) => ({
+          createdAt: previousTask.statusUpdatedAt,
+          text: previousTask.text,
         })),
         task.previousContextMessages,
       ),
@@ -130,8 +139,16 @@ export async function claimNextTasks(limit: number): Promise<DaemonTask[]> {
 
     const candidates = await tx.task.findMany({
       include: {
-        project: true,
-        subproject: true,
+        project: {
+          select: {
+            path: true,
+          },
+        },
+        subproject: {
+          select: {
+            path: true,
+          },
+        },
       },
       orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
       take: normalizedLimit * 10,

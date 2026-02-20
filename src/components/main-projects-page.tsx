@@ -1,41 +1,57 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import {
   ArrowDown,
   ArrowUp,
   ChevronDown,
   ChevronUp,
+  EllipsisVertical,
   EyeOff,
   FolderGit2,
   GripVertical,
   Hand,
+  Info,
   ListTodo,
   Pause,
+  Pencil,
   Play,
-  Plus,
   Save,
   Settings,
+  Square,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
   DEFAULT_TASK_MODEL,
   DEFAULT_TASK_REASONING,
   TASK_MODEL_OPTIONS,
+  TASK_REASONING_OPTIONS,
 } from "@/lib/task-reasoning";
+import { clearTaskFormPreferences } from "@/lib/task-form-preferences";
 
-import type { ProjectEntity, SubprojectEntity, TaskEntity } from "../../shared/contracts";
+import type {
+  ProjectEntity,
+  SubprojectEntity,
+  TaskEntity,
+} from "../../shared/contracts";
 import { buildTaskScopeHref, canEditTask, requestJson } from "./app-dashboard-helpers";
-import { CreateProjectModal } from "./create-project-modal";
+import {
+  ProjectQuickAdd,
+  type ProjectQuickAddPayload,
+} from "./project-quick-add";
+import { buildProjectAvatar } from "./project-avatar";
 import {
   SubprojectQuickAdd,
   type SubprojectQuickAddPayload,
 } from "./subproject-quick-add";
 import { TaskQuickAdd, type TaskQuickAddPayload } from "./task-quick-add";
+import { usePreventUnhandledFileDrop } from "./use-prevent-unhandled-file-drop";
 import { useRealtimeSync } from "./use-realtime-sync";
 import { Checkbox } from "./ui/checkbox";
 import { Button } from "./ui/button";
@@ -58,13 +74,88 @@ type ProjectTree = ProjectEntity & {
   tasks: TaskEntity[];
 };
 
-const DUMMY_CODEX_CONNECTED = true;
-const DUMMY_WEEKLY_LIMIT_USED_PERCENT = 64;
-const DUMMY_FIVE_HOUR_LIMIT_USED_PERCENT = 38;
+const CODEX_USAGE_POLL_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_CODEX_AUTH_FILE = "~/.codex/auth.json";
+
+interface CodexUsageApiResponse {
+  results: Array<{
+    authFile: string;
+    endpoint?: string;
+    error?: string;
+    ok: boolean;
+    refreshedToken?: boolean;
+    usage?: {
+      accountId?: string;
+      allowed: boolean;
+      fiveHourResetAt: string;
+      fiveHourUsedPercent: number;
+      planType?: string;
+      weeklyResetAt: string;
+      weeklyUsedPercent: number | null;
+    };
+  }>;
+}
+
+function normalizePercent(percent: number): number {
+  return Math.max(0, Math.min(100, Math.floor(percent)));
+}
 
 function progressWidth(percent: number): string {
-  const normalized = Math.max(0, Math.min(100, Math.floor(percent)));
+  const normalized = normalizePercent(percent);
   return `${normalized}%`;
+}
+
+function limitProgressClass(percent: number): string {
+  if (percent <= 3) {
+    return "bg-red-500";
+  }
+
+  if (percent <= 10) {
+    return "bg-orange-500";
+  }
+
+  return "bg-zinc-700";
+}
+
+interface LimitResetLabel {
+  suffix?: string;
+  text: string;
+}
+
+function formatLimitReset(value: string | null): LimitResetLabel {
+  if (!value || value === "n/a") {
+    return { text: "resets n/a" };
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return { text: `resets ${value}` };
+  }
+
+  const now = new Date();
+  const isToday =
+    parsed.getFullYear() === now.getFullYear() &&
+    parsed.getMonth() === now.getMonth() &&
+    parsed.getDate() === now.getDate();
+  const hours = String(parsed.getHours()).padStart(2, "0");
+  const minutes = String(parsed.getMinutes()).padStart(2, "0");
+  const compactTime = `${hours}:${minutes}`;
+
+  if (isToday) {
+    const remainingMinutes = Math.max(
+      0,
+      Math.ceil((parsed.getTime() - now.getTime()) / (60 * 1000)),
+    );
+    const remainingHours = Math.floor(remainingMinutes / 60);
+    const remainingMins = String(remainingMinutes % 60).padStart(2, "0");
+    return {
+      suffix: `in ${remainingHours}:${remainingMins}`,
+      text: `resets ${compactTime} -`,
+    };
+  }
+
+  const monthShort = new Intl.DateTimeFormat(undefined, { month: "short" }).format(parsed);
+  return { text: `resets ${compactTime} on ${parsed.getDate()} ${monthShort}` };
 }
 
 const TASK_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
@@ -96,6 +187,24 @@ function isFinishedTask(task: TaskEntity): boolean {
   return task.status === "done" || task.status === "failed" || task.status === "stopped";
 }
 
+function findTaskInProjects(projects: ProjectTree[], taskId: string): TaskEntity | null {
+  for (const project of projects) {
+    const projectTask = project.tasks.find((task) => task.id === taskId);
+    if (projectTask) {
+      return projectTask;
+    }
+
+    for (const subproject of project.subprojects) {
+      const subprojectTask = subproject.tasks.find((task) => task.id === taskId);
+      if (subprojectTask) {
+        return subprojectTask;
+      }
+    }
+  }
+
+  return null;
+}
+
 function isProjectTasksVisibleOnMainPage(project: ProjectTree): boolean {
   return project.mainPageTasksVisible;
 }
@@ -104,12 +213,17 @@ function isProjectSubprojectsVisibleOnMainPage(project: ProjectTree): boolean {
   return project.mainPageSubprojectsVisible;
 }
 
+function isProjectCollapsedOnMainPage(project: ProjectTree): boolean {
+  return project.mainPageCollapsed;
+}
+
 export function MainProjectsPage() {
+  usePreventUnhandledFileDrop();
+
   const [projects, setProjects] = useState<ProjectTree[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [createModalOpen, setCreateModalOpen] = useState(false);
   const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null);
   const [draggingSubproject, setDraggingSubproject] = useState<{
     projectId: string;
@@ -123,10 +237,35 @@ export function MainProjectsPage() {
     id: string;
     text: string;
   } | null>(null);
+  const [stopTaskTarget, setStopTaskTarget] = useState<{
+    id: string;
+    text: string;
+  } | null>(null);
+  const [deleteProjectTarget, setDeleteProjectTarget] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
+  const [openProjectIconMenuId, setOpenProjectIconMenuId] = useState<string | null>(null);
+  const [projectIconPickerProjectId, setProjectIconPickerProjectId] = useState<string | null>(
+    null,
+  );
+  const [projectIconUploadProjectId, setProjectIconUploadProjectId] = useState<string | null>(
+    null,
+  );
+  const [projectIconDeleteProjectId, setProjectIconDeleteProjectId] = useState<string | null>(
+    null,
+  );
   const [deleteSubprojectTarget, setDeleteSubprojectTarget] = useState<{
     id: string;
     name: string;
   } | null>(null);
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editingProjectName, setEditingProjectName] = useState("");
+  const [editingProjectSubmitting, setEditingProjectSubmitting] = useState(false);
+  const [editingSubprojectId, setEditingSubprojectId] = useState<string | null>(null);
+  const [editingSubprojectName, setEditingSubprojectName] = useState("");
+  const [editingSubprojectSubmitting, setEditingSubprojectSubmitting] = useState(false);
   const [expandedSubprojectTasks, setExpandedSubprojectTasks] = useState<
     Record<string, boolean>
   >({});
@@ -140,9 +279,43 @@ export function MainProjectsPage() {
   const [taskDetailsIncludeContext, setTaskDetailsIncludeContext] = useState(false);
   const [taskDetailsContextCount, setTaskDetailsContextCount] = useState(0);
   const [taskDetailsSubmitting, setTaskDetailsSubmitting] = useState(false);
+  const [codexConnected, setCodexConnected] = useState(false);
+  const [codexWeeklyLimitUsedPercent, setCodexWeeklyLimitUsedPercent] = useState(0);
+  const [codexFiveHourLimitUsedPercent, setCodexFiveHourLimitUsedPercent] = useState(0);
+  const [codexConnectionError, setCodexConnectionError] = useState<string | null>(null);
+  const [codexResolvedAuthFilePath, setCodexResolvedAuthFilePath] = useState(
+    DEFAULT_CODEX_AUTH_FILE,
+  );
+  const [codexFiveHourResetAt, setCodexFiveHourResetAt] = useState<string | null>(null);
+  const [codexWeeklyResetAt, setCodexWeeklyResetAt] = useState<string | null>(null);
+  const [codexUsageEndpoint, setCodexUsageEndpoint] = useState<string | null>(null);
+  const [codexUsageCheckedAt, setCodexUsageCheckedAt] = useState<string | null>(null);
+  const [codexInfoOpen, setCodexInfoOpen] = useState(false);
+  const [projectIconLoadErrors, setProjectIconLoadErrors] = useState<Record<string, boolean>>(
+    {},
+  );
+  const [projectIconCacheBustByProjectId, setProjectIconCacheBustByProjectId] = useState<
+    Record<string, number>
+  >({});
+  const projectIconInputRef = useRef<HTMLInputElement | null>(null);
+  const codexInfoRef = useRef<HTMLDivElement | null>(null);
 
   const stopDragPropagation = (event: { stopPropagation: () => void }) => {
     event.stopPropagation();
+  };
+
+  const shouldBlockContainerDragStart = (event: {
+    target: EventTarget | null;
+  }): boolean => {
+    if (!(event.target instanceof Element)) {
+      return false;
+    }
+
+    return Boolean(
+      event.target.closest(
+        "input, textarea, select, button, a, [contenteditable=''], [contenteditable='true']",
+      ),
+    );
   };
 
   const preventControlDragStart = (event: {
@@ -151,6 +324,13 @@ export function MainProjectsPage() {
   }) => {
     event.preventDefault();
     event.stopPropagation();
+  };
+
+  const bumpProjectIconCacheBust = (projectId: string) => {
+    setProjectIconCacheBustByProjectId((previous) => ({
+      ...previous,
+      [projectId]: (previous[projectId] ?? 0) + 1,
+    }));
   };
 
   const loadProjects = useCallback(async (options?: { silent?: boolean }) => {
@@ -171,13 +351,271 @@ export function MainProjectsPage() {
     }
   }, []);
 
+  const loadCodexUsage = useCallback(async () => {
+    try {
+      const usageResponse = await requestJson<CodexUsageApiResponse>("/api/codex/usage", {
+        body: JSON.stringify({}),
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+
+      const result = usageResponse.results[0];
+      if (!result) {
+        throw new Error("Usage API returned an empty result");
+      }
+
+      setCodexResolvedAuthFilePath(result.authFile || DEFAULT_CODEX_AUTH_FILE);
+
+      if (!result.ok || !result.usage) {
+        const rawError = result.error?.trim() ?? "Unknown usage API error";
+        const compactError = rawError.replace(/\s+/g, " ").slice(0, 220);
+        setCodexConnected(false);
+        setCodexConnectionError(compactError);
+        setCodexWeeklyLimitUsedPercent(0);
+        setCodexFiveHourLimitUsedPercent(0);
+        setCodexFiveHourResetAt(null);
+        setCodexWeeklyResetAt(null);
+        setCodexUsageEndpoint(null);
+        setCodexUsageCheckedAt(new Date().toISOString());
+        return;
+      }
+
+      setCodexConnected(true);
+      setCodexConnectionError(null);
+      setCodexWeeklyLimitUsedPercent(result.usage.weeklyUsedPercent ?? 0);
+      setCodexFiveHourLimitUsedPercent(result.usage.fiveHourUsedPercent);
+      setCodexFiveHourResetAt(result.usage.fiveHourResetAt ?? null);
+      setCodexWeeklyResetAt(result.usage.weeklyResetAt ?? null);
+      setCodexUsageEndpoint(result.endpoint ?? null);
+      setCodexUsageCheckedAt(new Date().toISOString());
+    } catch (error) {
+      const message = (error instanceof Error ? error.message : "Failed to check Codex usage")
+        .replace(/\s+/g, " ")
+        .slice(0, 220);
+      setCodexConnected(false);
+      setCodexConnectionError(message);
+      setCodexWeeklyLimitUsedPercent(0);
+      setCodexFiveHourLimitUsedPercent(0);
+      setCodexFiveHourResetAt(null);
+      setCodexWeeklyResetAt(null);
+      setCodexUsageEndpoint(null);
+      setCodexUsageCheckedAt(new Date().toISOString());
+    }
+  }, []);
+
   useEffect(() => {
     void loadProjects();
   }, [loadProjects]);
 
+  useEffect(() => {
+    void loadCodexUsage();
+
+    const intervalId = window.setInterval(() => {
+      void loadCodexUsage();
+    }, CODEX_USAGE_POLL_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [loadCodexUsage]);
+
   useRealtimeSync(() => {
     void loadProjects({ silent: true });
   });
+
+  useEffect(() => {
+    setTaskDetailsTarget((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const latestTask = findTaskInProjects(projects, current.task.id);
+      if (!latestTask) {
+        return null;
+      }
+
+      if (latestTask === current.task) {
+        return current;
+      }
+
+      return {
+        ...current,
+        task: latestTask,
+      };
+    });
+  }, [projects]);
+
+  useEffect(() => {
+    if (!openProjectMenuId && !openProjectIconMenuId) {
+      return;
+    }
+    if (openProjectMenuId && !projects.some((project) => project.id === openProjectMenuId)) {
+      setOpenProjectMenuId(null);
+    }
+    if (
+      openProjectIconMenuId &&
+      !projects.some((project) => project.id === openProjectIconMenuId)
+    ) {
+      setOpenProjectIconMenuId(null);
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!(event.target instanceof Element)) {
+        return;
+      }
+      if (event.target.closest("[data-project-actions-menu]")) {
+        return;
+      }
+      if (event.target.closest("[data-project-icon-menu]")) {
+        return;
+      }
+      setOpenProjectMenuId(null);
+      setOpenProjectIconMenuId(null);
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenProjectMenuId(null);
+        setOpenProjectIconMenuId(null);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [openProjectIconMenuId, openProjectMenuId, projects]);
+
+  useEffect(() => {
+    if (!codexInfoOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) {
+        return;
+      }
+
+      if (codexInfoRef.current?.contains(event.target)) {
+        return;
+      }
+
+      setCodexInfoOpen(false);
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setCodexInfoOpen(false);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleEscape);
+
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [codexInfoOpen]);
+
+  const handleQuickProjectCreate = async (payload: ProjectQuickAddPayload) => {
+    try {
+      await requestJson("/api/projects", {
+        body: JSON.stringify({
+          metadata: payload.metadata || undefined,
+          name: payload.name,
+          path: payload.path,
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+      await loadProjects();
+      toast.success("Project created");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to create project");
+    }
+  };
+
+  const startProjectNameEdit = (project: ProjectTree) => {
+    setEditingProjectId(project.id);
+    setEditingProjectName(project.name);
+  };
+
+  const cancelProjectNameEdit = () => {
+    setEditingProjectId(null);
+    setEditingProjectName("");
+  };
+
+  const saveProjectNameEdit = async () => {
+    if (!editingProjectId) {
+      return;
+    }
+
+    const nextName = editingProjectName.trim();
+    if (nextName.length < 1) {
+      setErrorMessage("Project name is required");
+      return;
+    }
+
+    setEditingProjectSubmitting(true);
+    try {
+      await requestJson(`/api/projects/${editingProjectId}`, {
+        body: JSON.stringify({ name: nextName }),
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      });
+      cancelProjectNameEdit();
+      await loadProjects();
+      toast.success("Project renamed");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to rename project");
+    } finally {
+      setEditingProjectSubmitting(false);
+    }
+  };
+
+  const startSubprojectNameEdit = (subproject: SubprojectWithTasks) => {
+    setEditingSubprojectId(subproject.id);
+    setEditingSubprojectName(subproject.name);
+  };
+
+  const cancelSubprojectNameEdit = () => {
+    setEditingSubprojectId(null);
+    setEditingSubprojectName("");
+  };
+
+  const saveSubprojectNameEdit = async () => {
+    if (!editingSubprojectId) {
+      return;
+    }
+
+    const nextName = editingSubprojectName.trim();
+    if (nextName.length < 1) {
+      setErrorMessage("Subproject name is required");
+      return;
+    }
+
+    setEditingSubprojectSubmitting(true);
+    try {
+      await requestJson(`/api/subprojects/${editingSubprojectId}`, {
+        body: JSON.stringify({ name: nextName }),
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      });
+      cancelSubprojectNameEdit();
+      await loadProjects();
+      toast.success("Subproject renamed");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to rename subproject");
+    } finally {
+      setEditingSubprojectSubmitting(false);
+    }
+  };
 
   const handleProjectDrop = async (targetProjectId: string) => {
     if (!draggingProjectId || draggingProjectId === targetProjectId) {
@@ -218,9 +656,84 @@ export function MainProjectsPage() {
         method: "PATCH",
       });
       await loadProjects();
-      toast.success(project.paused ? "Project resumed" : "Project paused");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to update project status");
+    }
+  };
+
+  const handleProjectCollapsedToggle = async (project: ProjectTree) => {
+    const collapsedNow = isProjectCollapsedOnMainPage(project);
+    const nextCollapsed = !collapsedNow;
+
+    try {
+      await requestJson(`/api/projects/${project.id}`, {
+        body: JSON.stringify({ mainPageCollapsed: nextCollapsed }),
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      });
+      await loadProjects();
+      toast.success(nextCollapsed ? "Project collapsed" : "Project expanded");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to update project settings");
+    }
+  };
+
+  const handleProjectIconUpload = async (projectId: string, file: File) => {
+    setProjectIconUploadProjectId(projectId);
+    try {
+      const formData = new FormData();
+      formData.set("file", file);
+
+      const response = await fetch(`/api/projects/${projectId}/icon`, {
+        body: formData,
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        let message = `Project icon upload failed with HTTP ${response.status}`;
+        try {
+          const payload = (await response.json()) as {
+            details?: string;
+            error?: { message?: string };
+          };
+          message = payload.error?.message?.trim() || payload.details?.trim() || message;
+        } catch {
+          // no-op
+        }
+        throw new Error(message);
+      }
+
+      await loadProjects({ silent: true });
+      bumpProjectIconCacheBust(projectId);
+      setProjectIconLoadErrors((previous) => {
+        const next = { ...previous };
+        delete next[projectId];
+        return next;
+      });
+      toast.success("Project icon uploaded");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to upload project icon");
+    } finally {
+      setProjectIconUploadProjectId(null);
+    }
+  };
+
+  const handleProjectIconDelete = async (projectId: string) => {
+    setProjectIconDeleteProjectId(projectId);
+    try {
+      await requestJson(`/api/projects/${projectId}/icon`, { method: "DELETE" });
+      await loadProjects({ silent: true });
+      bumpProjectIconCacheBust(projectId);
+      setProjectIconLoadErrors((previous) => {
+        const next = { ...previous };
+        delete next[projectId];
+        return next;
+      });
+      toast.success("Uploaded project icon deleted");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to delete uploaded project icon");
+    } finally {
+      setProjectIconDeleteProjectId(null);
     }
   };
 
@@ -232,13 +745,17 @@ export function MainProjectsPage() {
         method: "PATCH",
       });
       await loadProjects();
-      toast.success(subproject.paused ? "Subproject resumed" : "Subproject paused");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to update subproject status");
     }
   };
 
   const handleProjectTaskPauseToggle = async (task: TaskEntity) => {
+    if (!canEditTask(task)) {
+      setErrorMessage("Running tasks cannot be edited");
+      return;
+    }
+
     try {
       await requestJson(`/api/tasks/${task.id}/action`, {
         body: JSON.stringify({ action: task.paused ? "resume" : "pause" }),
@@ -246,15 +763,19 @@ export function MainProjectsPage() {
         method: "POST",
       });
       await loadProjects();
-      toast.success(task.paused ? "Task resumed" : "Task paused");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to update task status");
     }
   };
 
-  const handleProjectTaskRemove = async (taskId: string) => {
+  const handleProjectTaskRemove = async (task: TaskEntity) => {
+    if (!canEditTask(task)) {
+      setErrorMessage("Running tasks cannot be edited");
+      return;
+    }
+
     try {
-      await requestJson(`/api/tasks/${taskId}/action`, {
+      await requestJson(`/api/tasks/${task.id}/action`, {
         body: JSON.stringify({ action: "remove" }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
@@ -267,6 +788,11 @@ export function MainProjectsPage() {
   };
 
   const openTaskDetails = (project: ProjectTree, task: TaskEntity) => {
+    if (!canEditTask(task)) {
+      setErrorMessage("Running tasks cannot be edited");
+      return;
+    }
+
     setTaskDetailsTarget({
       projectName: project.name,
       task,
@@ -506,30 +1032,138 @@ export function MainProjectsPage() {
       return;
     }
 
-    await handleProjectTaskRemove(deleteTaskTarget.id);
+    const latestTask = findTaskInProjects(projects, deleteTaskTarget.id);
+    if (!latestTask) {
+      setDeleteTaskTarget(null);
+      return;
+    }
+
+    await handleProjectTaskRemove(latestTask);
     setDeleteTaskTarget(null);
   };
+
+  const handleConfirmTaskStop = async () => {
+    if (!stopTaskTarget) {
+      return;
+    }
+
+    const latestTask = findTaskInProjects(projects, stopTaskTarget.id);
+    if (!latestTask) {
+      setStopTaskTarget(null);
+      return;
+    }
+
+    if (latestTask.status !== "in_progress") {
+      setStopTaskTarget(null);
+      toast.info("Task is no longer running");
+      return;
+    }
+
+    try {
+      await requestJson(`/api/tasks/${latestTask.id}/action`, {
+        body: JSON.stringify({ action: "stop" }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+      setStopTaskTarget(null);
+      await loadProjects();
+      toast.success("Stop requested");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to stop task");
+    }
+  };
+
+  const deleteTaskTargetCurrent = deleteTaskTarget
+    ? findTaskInProjects(projects, deleteTaskTarget.id)
+    : null;
+  const deleteTaskTargetLocked = deleteTaskTargetCurrent ? !canEditTask(deleteTaskTargetCurrent) : false;
+  const stopTaskTargetCurrent = stopTaskTarget ? findTaskInProjects(projects, stopTaskTarget.id) : null;
+  const stopTaskTargetRunning = stopTaskTargetCurrent?.status === "in_progress";
+
+  const handleConfirmProjectDelete = async () => {
+    if (!deleteProjectTarget) {
+      return;
+    }
+
+    const projectId = deleteProjectTarget.id;
+    try {
+      await requestJson(`/api/projects/${projectId}`, {
+        method: "DELETE",
+      });
+      clearTaskFormPreferences(projectId);
+      setDeleteProjectTarget(null);
+      await loadProjects();
+      toast.success("Project removed");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to delete project");
+    }
+  };
+
+  const codexConnectionInfo = [
+    `auth file: ${codexResolvedAuthFilePath}`,
+    `endpoint: ${codexUsageEndpoint ?? "n/a"}`,
+    `checked: ${
+      codexUsageCheckedAt ? new Date(codexUsageCheckedAt).toLocaleString() : "n/a"
+    }`,
+  ].join("\n");
+  const codexFiveHourLimitRemainingPercent = codexConnected
+    ? normalizePercent(100 - codexFiveHourLimitUsedPercent)
+    : 0;
+  const codexWeeklyLimitRemainingPercent = codexConnected
+    ? normalizePercent(100 - codexWeeklyLimitUsedPercent)
+    : 0;
+  const fiveHourResetLabel = formatLimitReset(codexFiveHourResetAt);
+  const weeklyResetLabel = formatLimitReset(codexWeeklyResetAt);
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-zinc-100 p-4 md:p-8">
       <div className="mx-auto w-full max-w-6xl space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="space-y-4">
-            <Link
-              className="inline-flex items-center gap-2 text-xl font-semibold transition-opacity hover:opacity-80"
-              href="/"
-            >
-              <Hand className="h-5 w-5" />
-              OpenClap
-            </Link>
-            <div className="w-[320px] space-y-3 rounded-md border border-black/10 bg-white/70 p-4">
+        <div className="space-y-4">
+          <Link
+            className="inline-flex items-center gap-2 text-xl font-semibold transition-opacity hover:opacity-80"
+            href="/"
+          >
+            <Hand className="h-5 w-5" />
+            OpenClap
+          </Link>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div className="relative w-[320px] space-y-3 rounded-md border border-black/10 bg-white/70 p-4">
+              <div className="absolute right-3 top-3" ref={codexInfoRef}>
+                <button
+                  aria-label="Codex limits details"
+                  className="text-zinc-500 transition-colors hover:text-zinc-800"
+                  onClick={() => setCodexInfoOpen((state) => !state)}
+                  title={codexConnectionInfo}
+                  type="button"
+                >
+                  <Info className="h-4 w-4" />
+                </button>
+                {codexInfoOpen ? (
+                  <div className="absolute right-0 z-30 mt-2 w-[300px] space-y-1 rounded-md border border-black/10 bg-white p-3 text-xs text-zinc-700 shadow-lg">
+                    <div>auth file: {codexResolvedAuthFilePath}</div>
+                    <div>endpoint: {codexUsageEndpoint ?? "n/a"}</div>
+                    <div>
+                      checked:{" "}
+                      {codexUsageCheckedAt
+                        ? new Date(codexUsageCheckedAt).toLocaleString()
+                        : "n/a"}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
               <div className="flex items-center text-sm font-medium">
                 <div className="flex items-center gap-2">
                   <span
-                    aria-label={DUMMY_CODEX_CONNECTED ? "Connected" : "Disconnected"}
-                    title={`Codex status: ${DUMMY_CODEX_CONNECTED ? "Connected" : "Disconnected"}`}
+                    aria-label={codexConnected ? "Connected" : "Disconnected"}
+                    title={`Codex status: ${
+                      codexConnected
+                        ? "Connected"
+                        : codexConnectionError
+                          ? `Disconnected: ${codexConnectionError}`
+                          : "Disconnected"
+                    }`}
                     className={`h-2.5 w-2.5 rounded-full ${
-                      DUMMY_CODEX_CONNECTED ? "bg-emerald-500" : "bg-red-500"
+                      codexConnected ? "bg-emerald-500" : "bg-red-500"
                     }`}
                   />
                   <span>Codex connection</span>
@@ -538,36 +1172,42 @@ export function MainProjectsPage() {
 
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-sm font-medium text-zinc-700">
-                  <span>Weekly limit</span>
-                  <span>{DUMMY_WEEKLY_LIMIT_USED_PERCENT}%</span>
+                  <span>5h limit</span>
+                  <span>{codexFiveHourLimitRemainingPercent}%</span>
                 </div>
                 <div className="h-2 overflow-hidden rounded bg-zinc-200">
                   <div
-                    className="h-full bg-zinc-700"
-                    style={{ width: progressWidth(DUMMY_WEEKLY_LIMIT_USED_PERCENT) }}
+                    className={`h-full ${limitProgressClass(codexFiveHourLimitRemainingPercent)}`}
+                    style={{ width: progressWidth(codexFiveHourLimitRemainingPercent) }}
                   />
+                </div>
+                <div className="text-[11px] text-zinc-500">
+                  {fiveHourResetLabel.text}{" "}
+                  {fiveHourResetLabel.suffix ? (
+                    <span className="font-semibold">{fiveHourResetLabel.suffix}</span>
+                  ) : null}
                 </div>
               </div>
 
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-sm font-medium text-zinc-700">
-                  <span>5h limit</span>
-                  <span>{DUMMY_FIVE_HOUR_LIMIT_USED_PERCENT}%</span>
+                  <span>Weekly limit</span>
+                  <span>{codexWeeklyLimitRemainingPercent}%</span>
                 </div>
                 <div className="h-2 overflow-hidden rounded bg-zinc-200">
                   <div
-                    className="h-full bg-zinc-700"
-                    style={{ width: progressWidth(DUMMY_FIVE_HOUR_LIMIT_USED_PERCENT) }}
+                    className={`h-full ${limitProgressClass(codexWeeklyLimitRemainingPercent)}`}
+                    style={{ width: progressWidth(codexWeeklyLimitRemainingPercent) }}
                   />
+                </div>
+                <div className="text-[11px] text-zinc-500">
+                  {weeklyResetLabel.text}{" "}
+                  {weeklyResetLabel.suffix ? (
+                    <span className="font-semibold">{weeklyResetLabel.suffix}</span>
+                  ) : null}
                 </div>
               </div>
             </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button onClick={() => setCreateModalOpen(true)} type="button" variant="outline">
-              <Plus className="h-4 w-4" />
-              Create Project
-            </Button>
             <Button asChild type="button" variant="outline">
               <Link href="/settings">
                 <Settings className="h-4 w-4" />
@@ -576,6 +1216,30 @@ export function MainProjectsPage() {
             </Button>
           </div>
         </div>
+
+        <ProjectQuickAdd
+          onError={(message) => setErrorMessage(message)}
+          onSubmit={handleQuickProjectCreate}
+          placeholder="Create project"
+          submitAriaLabel="Create project"
+          submitTitle="Create project"
+        />
+        <input
+          accept="image/*"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            const projectId = projectIconPickerProjectId;
+            event.target.value = "";
+            setProjectIconPickerProjectId(null);
+            if (!file || !projectId) {
+              return;
+            }
+            void handleProjectIconUpload(projectId, file);
+          }}
+          ref={projectIconInputRef}
+          type="file"
+        />
 
         {!hasLoadedOnce && loading ? (
           <div className="grid gap-4" role="status">
@@ -599,14 +1263,21 @@ export function MainProjectsPage() {
         {hasLoadedOnce && projects.length < 1 ? (
           <Card>
             <CardContent className="py-10 text-sm text-zinc-600">
-              No projects yet. Use <strong>Create Project</strong> to start.
+              No projects yet. Use the create project input above.
             </CardContent>
           </Card>
         ) : null}
 
         {projects.map((project) => {
+          const projectCollapsed = isProjectCollapsedOnMainPage(project);
           const projectTasksVisible = isProjectTasksVisibleOnMainPage(project);
           const projectSubprojectsVisible = isProjectSubprojectsVisibleOnMainPage(project);
+          const projectAvatar = buildProjectAvatar(project.name);
+          const hasUploadedIcon = Boolean(project.iconPath);
+          const projectIconCacheBust = projectIconCacheBustByProjectId[project.id] ?? 0;
+          const projectIconVersion = `${project.updatedAt}:${hasUploadedIcon ? "uploaded" : "project"}:${projectIconCacheBust}`;
+          const projectIconSource = `/api/projects/${project.id}/icon`;
+          const showFallbackAvatar = projectIconLoadErrors[project.id] ?? false;
           const visibleProjectTasks = project.tasks.filter((task) => !isFinishedTask(task));
           return (
             <div
@@ -615,45 +1286,318 @@ export function MainProjectsPage() {
               key={project.id}
               onDragEnd={() => setDraggingProjectId(null)}
               onDragOver={(event) => event.preventDefault()}
-              onDragStart={() => setDraggingProjectId(project.id)}
+              onDragStart={(event) => {
+                if (shouldBlockContainerDragStart(event)) {
+                  event.preventDefault();
+                  return;
+                }
+
+                setDraggingProjectId(project.id);
+              }}
               onDrop={() => void handleProjectDrop(project.id)}
             >
               <Card>
-              <CardHeader>
-                <CardTitle className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <Button
-                      aria-label={project.paused ? "Resume project" : "Pause project"}
-                      className={`h-9 w-9 rounded-full p-0 ${
-                        project.paused
-                          ? "border-amber-300 text-amber-700 hover:bg-amber-50"
-                          : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-                      }`}
-                      draggable={false}
-                      onDragStart={preventControlDragStart}
-                      onMouseDown={stopDragPropagation}
-                      onPointerDown={stopDragPropagation}
-                      onClick={() => void handleProjectPauseToggle(project)}
-                      size="sm"
-                      title={project.paused ? "Resume project" : "Pause project"}
-                      type="button"
-                      variant="outline"
-                    >
-                      {project.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
-                      <span className="sr-only">{project.paused ? "Resume project" : "Pause project"}</span>
-                    </Button>
-                    <Link
-                      className="font-medium underline-offset-4 hover:underline"
-                      href={buildTaskScopeHref(project.id)}
-                    >
-                      {project.name}
-                    </Link>
-                  </div>
-                </CardTitle>
-                <div className="text-xs text-zinc-600">{project.path}</div>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
+                <CardHeader className={projectCollapsed ? "py-4" : undefined}>
+                  <CardTitle className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <Button
+                        aria-label={project.paused ? "Resume project" : "Pause project"}
+                        className={`h-9 w-9 rounded-full p-0 ${
+                          project.paused
+                            ? "border-amber-300 text-amber-700 hover:bg-amber-50"
+                            : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                        }`}
+                        draggable={false}
+                        onDragStart={preventControlDragStart}
+                        onMouseDown={stopDragPropagation}
+                        onPointerDown={stopDragPropagation}
+                        onClick={() => void handleProjectPauseToggle(project)}
+                        size="sm"
+                        title={project.paused ? "Resume project" : "Pause project"}
+                        type="button"
+                        variant="outline"
+                      >
+                        {project.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                        <span className="sr-only">{project.paused ? "Resume project" : "Pause project"}</span>
+                      </Button>
+                      <div className="relative" data-project-icon-menu>
+                        <button
+                          aria-expanded={openProjectIconMenuId === project.id}
+                          aria-haspopup="menu"
+                          aria-label={`Project icon options for ${project.name}`}
+                          className="rounded-full"
+                          draggable={false}
+                          onDragStart={preventControlDragStart}
+                          onMouseDown={stopDragPropagation}
+                          onPointerDown={stopDragPropagation}
+                          onClick={() => {
+                            setOpenProjectMenuId(null);
+                            setOpenProjectIconMenuId((current) =>
+                              current === project.id ? null : project.id,
+                            );
+                          }}
+                          type="button"
+                        >
+                          {showFallbackAvatar ? (
+                            <div
+                              aria-hidden="true"
+                              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-xs font-semibold tracking-wide shadow-sm ring-1 ring-black/10"
+                              style={{
+                                backgroundColor: projectAvatar.backgroundColor,
+                                borderColor: projectAvatar.borderColor,
+                                color: projectAvatar.textColor,
+                              }}
+                            >
+                              {projectAvatar.initials}
+                            </div>
+                          ) : (
+                            <div
+                              aria-hidden="true"
+                              className={`h-9 w-9 shrink-0 overflow-hidden ${
+                                hasUploadedIcon
+                                  ? "rounded-full border border-zinc-300 bg-zinc-100 shadow-sm ring-1 ring-black/10"
+                                  : "rounded-none border-0 bg-transparent shadow-none ring-0"
+                              }`}
+                            >
+                              <Image
+                                alt=""
+                                aria-hidden="true"
+                                className={`h-full w-full ${hasUploadedIcon ? "object-cover" : "object-contain"}`}
+                                draggable={false}
+                                height={36}
+                                key={`${project.id}:${projectIconVersion}`}
+                                unoptimized
+                                onError={() => {
+                                  setProjectIconLoadErrors((previous) => ({
+                                    ...previous,
+                                    [project.id]: true,
+                                  }));
+                                }}
+                                onLoad={() => {
+                                  setProjectIconLoadErrors((previous) => {
+                                    if (!previous[project.id]) {
+                                      return previous;
+                                    }
+
+                                    const next = { ...previous };
+                                    delete next[project.id];
+                                    return next;
+                                  });
+                                }}
+                                src={projectIconSource}
+                                width={36}
+                              />
+                            </div>
+                          )}
+                        </button>
+                        {openProjectIconMenuId === project.id ? (
+                          <div
+                            className="absolute left-0 z-20 mt-1 min-w-[185px] rounded-md border border-black/10 bg-white p-1 shadow-lg"
+                            role="menu"
+                          >
+                            <button
+                              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-100"
+                              disabled={projectIconUploadProjectId === project.id}
+                              onMouseDown={stopDragPropagation}
+                              onPointerDown={stopDragPropagation}
+                              onClick={() => {
+                                setOpenProjectIconMenuId(null);
+                                setProjectIconPickerProjectId(project.id);
+                                projectIconInputRef.current?.click();
+                              }}
+                              role="menuitem"
+                              type="button"
+                            >
+                              <Upload className="h-4 w-4" />
+                              <span>Upload image</span>
+                            </button>
+                            {hasUploadedIcon ? (
+                              <button
+                                className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-red-700 hover:bg-red-50"
+                                disabled={projectIconDeleteProjectId === project.id}
+                                onMouseDown={stopDragPropagation}
+                                onPointerDown={stopDragPropagation}
+                                onClick={() => {
+                                  setOpenProjectIconMenuId(null);
+                                  void handleProjectIconDelete(project.id);
+                                }}
+                                role="menuitem"
+                                type="button"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                                <span>Delete</span>
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                      {editingProjectId === project.id ? (
+                        <div
+                          className="flex items-center gap-1"
+                          onMouseDown={stopDragPropagation}
+                          onPointerDown={stopDragPropagation}
+                        >
+                          <Input
+                            autoFocus
+                            className="h-8 w-[220px]"
+                            draggable={false}
+                            onChange={(event) => setEditingProjectName(event.target.value)}
+                            onDragStart={preventControlDragStart}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                void saveProjectNameEdit();
+                                return;
+                              }
+                              if (event.key === "Escape") {
+                                event.preventDefault();
+                                cancelProjectNameEdit();
+                              }
+                            }}
+                            onMouseDown={stopDragPropagation}
+                            onPointerDown={stopDragPropagation}
+                            value={editingProjectName}
+                          />
+                          <Button
+                            aria-label="Save project name"
+                            className="h-8 w-8 p-0"
+                            disabled={editingProjectSubmitting}
+                            draggable={false}
+                            onDragStart={preventControlDragStart}
+                            onMouseDown={stopDragPropagation}
+                            onPointerDown={stopDragPropagation}
+                            onClick={() => void saveProjectNameEdit()}
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                          >
+                            <Save className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            aria-label="Cancel project rename"
+                            className="h-8 w-8 p-0"
+                            disabled={editingProjectSubmitting}
+                            draggable={false}
+                            onDragStart={preventControlDragStart}
+                            onMouseDown={stopDragPropagation}
+                            onPointerDown={stopDragPropagation}
+                            onClick={cancelProjectNameEdit}
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="group/project-name flex items-center gap-1">
+                          <Link
+                            className="font-medium underline-offset-4 hover:underline"
+                            href={buildTaskScopeHref(project.id)}
+                          >
+                            {project.name}
+                          </Link>
+                          <Button
+                            aria-label={`Rename project ${project.name}`}
+                            className="h-7 w-7 p-0 opacity-0 transition-opacity group-hover/project-name:opacity-100"
+                            draggable={false}
+                            onDragStart={preventControlDragStart}
+                            onMouseDown={stopDragPropagation}
+                            onPointerDown={stopDragPropagation}
+                            onClick={() => startProjectNameEdit(project)}
+                            size="sm"
+                            title={`Rename project ${project.name}`}
+                            type="button"
+                            variant="ghost"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          {projectCollapsed ? (
+                            <span className="max-w-[42ch] truncate text-xs font-normal text-zinc-500">
+                              {project.path}
+                            </span>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        aria-label={projectCollapsed ? "Expand project" : "Collapse project to simple line"}
+                        className="h-8 w-8 rounded-full p-0"
+                        draggable={false}
+                        onDragStart={preventControlDragStart}
+                        onMouseDown={stopDragPropagation}
+                        onPointerDown={stopDragPropagation}
+                        onClick={() => void handleProjectCollapsedToggle(project)}
+                        size="sm"
+                        title={projectCollapsed ? "Expand project" : "Collapse project to simple line"}
+                        type="button"
+                        variant="outline"
+                      >
+                        {projectCollapsed ? (
+                          <ChevronDown className="h-4 w-4" />
+                        ) : (
+                          <ChevronUp className="h-4 w-4" />
+                        )}
+                        <span className="sr-only">
+                          {projectCollapsed ? "Expand project" : "Collapse project to simple line"}
+                        </span>
+                      </Button>
+                      <div className="relative" data-project-actions-menu>
+                        <Button
+                          aria-expanded={openProjectMenuId === project.id}
+                          aria-haspopup="menu"
+                          aria-label={`Project actions for ${project.name}`}
+                          className="h-8 w-8 rounded-full border-black/15 p-0 text-black/70 hover:bg-black/5 hover:text-black"
+                          draggable={false}
+                          onDragStart={preventControlDragStart}
+                          onMouseDown={stopDragPropagation}
+                          onPointerDown={stopDragPropagation}
+                          onClick={() =>
+                            setOpenProjectMenuId((current) =>
+                              current === project.id ? null : project.id,
+                            )
+                          }
+                          size="sm"
+                          title={`Project actions for ${project.name}`}
+                          type="button"
+                          variant="outline"
+                        >
+                          <EllipsisVertical className="h-4 w-4" />
+                          <span className="sr-only">Project actions</span>
+                        </Button>
+                        {openProjectMenuId === project.id ? (
+                          <div
+                            className="absolute right-0 z-20 mt-1 min-w-[95px] rounded-md border border-black/10 bg-white p-1 shadow-lg"
+                            role="menu"
+                          >
+                            <button
+                              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-red-700 hover:bg-red-50"
+                              onMouseDown={stopDragPropagation}
+                              onPointerDown={stopDragPropagation}
+                              onClick={() => {
+                                setOpenProjectMenuId(null);
+                                setDeleteProjectTarget({
+                                  id: project.id,
+                                  name: project.name,
+                                });
+                              }}
+                              role="menuitem"
+                              type="button"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              <span>Delete</span>
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </CardTitle>
+                  {projectCollapsed ? null : <div className="text-xs text-zinc-600">{project.path}</div>}
+                </CardHeader>
+                {projectCollapsed ? null : (
+                  <CardContent>
+                    <div className="space-y-4">
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2">
                       <div className="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
@@ -705,11 +1649,12 @@ export function MainProjectsPage() {
                               expandedSubprojectTasks[
                                 getSubprojectTasksKey(project.id, subproject.id)
                               ] ?? false;
+                            const subprojectEditingName = editingSubprojectId === subproject.id;
 
                             return (
                               <div
-                                className="rounded-md border border-black/10 bg-white"
-                                draggable
+                                className="rounded-md border border-zinc-300/80 bg-zinc-50/70"
+                                draggable={!subprojectEditingName}
                                 key={subproject.id}
                                 onDragEnd={() => setDraggingSubproject(null)}
                                 onDragOver={(event) => {
@@ -717,6 +1662,13 @@ export function MainProjectsPage() {
                                   event.stopPropagation();
                                 }}
                                 onDragStart={(event) => {
+                                  if (
+                                    subprojectEditingName ||
+                                    shouldBlockContainerDragStart(event)
+                                  ) {
+                                    event.preventDefault();
+                                    return;
+                                  }
                                   event.stopPropagation();
                                   setDraggingSubproject({
                                     projectId: project.id,
@@ -729,7 +1681,7 @@ export function MainProjectsPage() {
                                   void handleSubprojectDrop(project.id, subproject.id);
                                 }}
                               >
-                                <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
+                                <div className="flex flex-wrap items-center justify-between gap-3 rounded-t-md bg-zinc-100/70 px-3 py-2">
                                   <div className="flex items-center gap-2">
                                     <GripVertical className="h-4 w-4 text-zinc-400" />
                                     <Button
@@ -754,18 +1706,95 @@ export function MainProjectsPage() {
                                         {subproject.paused ? "Resume subproject" : "Pause subproject"}
                                       </span>
                                     </Button>
-                                    <button
-                                      className="font-medium text-left underline-offset-4 hover:underline"
-                                      draggable={false}
-                                      onMouseDown={stopDragPropagation}
-                                      onPointerDown={stopDragPropagation}
-                                      onClick={() =>
-                                        toggleSubprojectTasks(project.id, subproject.id)
-                                      }
-                                      type="button"
-                                    >
-                                      {subproject.name}
-                                    </button>
+                                    {subprojectEditingName ? (
+                                      <div
+                                        className="flex items-center gap-1"
+                                        onMouseDown={stopDragPropagation}
+                                        onPointerDown={stopDragPropagation}
+                                      >
+                                        <Input
+                                          autoFocus
+                                          className="h-8 w-[220px]"
+                                          draggable={false}
+                                          onChange={(event) => setEditingSubprojectName(event.target.value)}
+                                          onDragStart={preventControlDragStart}
+                                          onKeyDown={(event) => {
+                                            if (event.key === "Enter") {
+                                              event.preventDefault();
+                                              void saveSubprojectNameEdit();
+                                              return;
+                                            }
+                                            if (event.key === "Escape") {
+                                              event.preventDefault();
+                                              cancelSubprojectNameEdit();
+                                            }
+                                          }}
+                                          onMouseDown={stopDragPropagation}
+                                          onPointerDown={stopDragPropagation}
+                                          value={editingSubprojectName}
+                                        />
+                                        <Button
+                                          aria-label="Save subproject name"
+                                          className="h-8 w-8 p-0"
+                                          disabled={editingSubprojectSubmitting}
+                                          draggable={false}
+                                          onDragStart={preventControlDragStart}
+                                          onMouseDown={stopDragPropagation}
+                                          onPointerDown={stopDragPropagation}
+                                          onClick={() => void saveSubprojectNameEdit()}
+                                          size="sm"
+                                          type="button"
+                                          variant="outline"
+                                        >
+                                          <Save className="h-4 w-4" />
+                                        </Button>
+                                        <Button
+                                          aria-label="Cancel subproject rename"
+                                          className="h-8 w-8 p-0"
+                                          disabled={editingSubprojectSubmitting}
+                                          draggable={false}
+                                          onDragStart={preventControlDragStart}
+                                          onMouseDown={stopDragPropagation}
+                                          onPointerDown={stopDragPropagation}
+                                          onClick={cancelSubprojectNameEdit}
+                                          size="sm"
+                                          type="button"
+                                          variant="outline"
+                                        >
+                                          <X className="h-4 w-4" />
+                                        </Button>
+                                      </div>
+                                    ) : (
+                                      <div className="group/subproject-name flex items-center gap-1">
+                                        <button
+                                          className="font-medium text-left underline-offset-4 hover:underline"
+                                          draggable={false}
+                                          onMouseDown={stopDragPropagation}
+                                          onPointerDown={stopDragPropagation}
+                                          onClick={() =>
+                                            toggleSubprojectTasks(project.id, subproject.id)
+                                          }
+                                          type="button"
+                                        >
+                                          {subproject.name}
+                                        </button>
+                                        <Button
+                                          aria-label={`Rename subproject ${subproject.name}`}
+                                          className="h-7 w-7 p-0 opacity-0 transition-opacity group-hover/subproject-name:opacity-100"
+                                          draggable={false}
+                                          onDragStart={preventControlDragStart}
+                                          onMouseDown={stopDragPropagation}
+                                          onPointerDown={stopDragPropagation}
+                                          onClick={() => startSubprojectNameEdit(subproject)}
+                                          size="sm"
+                                          title={`Rename subproject ${subproject.name}`}
+                                          type="button"
+                                          variant="ghost"
+                                        >
+                                          <Pencil className="h-3.5 w-3.5" />
+                                        </Button>
+                                      </div>
+                                    )}
                                   </div>
                                   <div className="flex items-center gap-2">
                                     <Button
@@ -833,6 +1862,7 @@ export function MainProjectsPage() {
                                         handleQuickTaskCreate(project, payload, subproject.id)
                                       }
                                       placeholder={`Add task to ${subproject.name}`}
+                                      projectId={project.id}
                                       stopPropagation
                                       submitAriaLabel={`Add task to ${subproject.name}`}
                                       submitTitle={`Add task to ${subproject.name}`}
@@ -842,65 +1872,117 @@ export function MainProjectsPage() {
                                         No active tasks in this subproject
                                       </div>
                                     ) : (
-                                      activeSubprojectTasks.map((task) => (
-                                        <div
-                                          className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-start gap-2 rounded-md border border-black/10 bg-white px-3 py-2"
-                                          key={task.id}
-                                        >
-                                          <GripVertical className="mt-2 h-4 w-4 text-zinc-400" />
-                                          <Button
-                                            aria-label={task.paused ? "Resume task" : "Pause task"}
-                                            className={`h-8 w-8 rounded-full p-0 ${
-                                              task.paused
-                                                ? "border-amber-300 text-amber-700 hover:bg-amber-50"
-                                                : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-                                            }`}
-                                            draggable={false}
-                                            onDragStart={preventControlDragStart}
-                                            onMouseDown={stopDragPropagation}
-                                            onPointerDown={stopDragPropagation}
-                                            onClick={() => void handleProjectTaskPauseToggle(task)}
-                                            size="sm"
-                                            title={task.paused ? "Resume task" : "Pause task"}
-                                            type="button"
-                                            variant="outline"
+                                      activeSubprojectTasks.map((task) => {
+                                        const taskLocked = !canEditTask(task);
+
+                                        return (
+                                          <div
+                                            className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-start gap-2 rounded-md border border-black/10 bg-white px-3 py-2"
+                                            key={task.id}
                                           >
-                                            {task.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
-                                            <span className="sr-only">{task.paused ? "Resume task" : "Pause task"}</span>
-                                          </Button>
-                                          <button
-                                            className="min-w-0 cursor-pointer break-words pt-1 text-left text-sm leading-relaxed hover:underline"
-                                            draggable={false}
-                                            onClick={() => openTaskDetails(project, task)}
-                                            onMouseDown={stopDragPropagation}
-                                            onPointerDown={stopDragPropagation}
-                                            type="button"
-                                          >
-                                            {task.text}
-                                          </button>
-                                          <Button
-                                            aria-label={`Remove task ${task.text}`}
-                                            className="h-8 w-8 self-start rounded-full border-black/15 p-0 text-black/70 hover:bg-black/5 hover:text-black"
-                                            draggable={false}
-                                            onDragStart={preventControlDragStart}
-                                            onMouseDown={stopDragPropagation}
-                                            onPointerDown={stopDragPropagation}
-                                            onClick={() =>
-                                              setDeleteTaskTarget({
-                                                id: task.id,
-                                                text: task.text,
-                                              })
-                                            }
-                                            size="sm"
-                                            title={`Remove task ${task.text}`}
-                                            type="button"
-                                            variant="outline"
-                                          >
-                                            <X className="h-4 w-4" />
-                                            <span className="sr-only">Remove task</span>
-                                          </Button>
-                                        </div>
-                                      ))
+                                            <GripVertical className="mt-2 h-4 w-4 text-zinc-400" />
+                                            {task.status === "in_progress" ? (
+                                              <Button
+                                                aria-label="Stop task"
+                                                className="h-8 w-8 rounded-full border-orange-200 p-0 text-orange-700 hover:bg-orange-50"
+                                                draggable={false}
+                                                onDragStart={preventControlDragStart}
+                                                onMouseDown={stopDragPropagation}
+                                                onPointerDown={stopDragPropagation}
+                                                onClick={() =>
+                                                  setStopTaskTarget({
+                                                    id: task.id,
+                                                    text: task.text,
+                                                  })
+                                                }
+                                                size="sm"
+                                                title="Stop task"
+                                                type="button"
+                                                variant="outline"
+                                              >
+                                                <Square className="h-4 w-4" />
+                                                <span className="sr-only">Stop task</span>
+                                              </Button>
+                                            ) : (
+                                              <Button
+                                                aria-label={task.paused ? "Resume task" : "Pause task"}
+                                                className={`h-8 w-8 rounded-full p-0 ${
+                                                  task.paused
+                                                    ? "border-amber-300 text-amber-700 hover:bg-amber-50"
+                                                    : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                                                }`}
+                                                disabled={taskLocked}
+                                                draggable={false}
+                                                onDragStart={preventControlDragStart}
+                                                onMouseDown={stopDragPropagation}
+                                                onPointerDown={stopDragPropagation}
+                                                onClick={() => void handleProjectTaskPauseToggle(task)}
+                                                size="sm"
+                                                title={
+                                                  taskLocked
+                                                    ? "Task is currently executing and cannot be changed"
+                                                    : task.paused
+                                                      ? "Resume task"
+                                                      : "Pause task"
+                                                }
+                                                type="button"
+                                                variant="outline"
+                                              >
+                                                {task.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                                                <span className="sr-only">
+                                                  {task.paused ? "Resume task" : "Pause task"}
+                                                </span>
+                                              </Button>
+                                            )}
+                                            <button
+                                              className={`min-w-0 break-words pt-1 text-left text-sm leading-relaxed ${
+                                                taskLocked
+                                                  ? "cursor-not-allowed text-zinc-500"
+                                                  : "cursor-pointer hover:underline"
+                                              }`}
+                                              disabled={taskLocked}
+                                              draggable={false}
+                                              onClick={() => openTaskDetails(project, task)}
+                                              onMouseDown={stopDragPropagation}
+                                              onPointerDown={stopDragPropagation}
+                                              title={
+                                                taskLocked
+                                                  ? "Task is currently executing and cannot be edited"
+                                                  : "Edit task"
+                                              }
+                                              type="button"
+                                            >
+                                              {task.text}
+                                            </button>
+                                            <Button
+                                              aria-label={`Remove task ${task.text}`}
+                                              className="h-8 w-8 self-start rounded-full border-black/15 p-0 text-black/70 hover:bg-black/5 hover:text-black"
+                                              disabled={taskLocked}
+                                              draggable={false}
+                                              onDragStart={preventControlDragStart}
+                                              onMouseDown={stopDragPropagation}
+                                              onPointerDown={stopDragPropagation}
+                                              onClick={() =>
+                                                setDeleteTaskTarget({
+                                                  id: task.id,
+                                                  text: task.text,
+                                                })
+                                              }
+                                              size="sm"
+                                              title={
+                                                taskLocked
+                                                  ? "Task is currently executing and cannot be changed"
+                                                  : `Remove task ${task.text}`
+                                              }
+                                              type="button"
+                                              variant="outline"
+                                            >
+                                              <X className="h-4 w-4" />
+                                              <span className="sr-only">Remove task</span>
+                                            </Button>
+                                          </div>
+                                        );
+                                      })
                                     )}
                                   </div>
                                 ) : null}
@@ -909,12 +1991,7 @@ export function MainProjectsPage() {
                           })
                         )}
                       </>
-                    ) : (
-                      <div className="flex items-center gap-2 rounded-md border border-dashed border-amber-300 bg-amber-50/70 px-3 py-2 text-sm text-amber-800">
-                        <EyeOff className="h-4 w-4" />
-                        <span>Subproject list is hidden. Click the arrow button to show subprojects.</span>
-                      </div>
-                    )}
+                    ) : null}
                   </div>
 
                   <div className="space-y-2">
@@ -947,6 +2024,7 @@ export function MainProjectsPage() {
                         <TaskQuickAdd
                           onSubmit={(payload) => handleQuickTaskCreate(project, payload)}
                           placeholder="Add task"
+                          projectId={project.id}
                           stopPropagation
                           submitAriaLabel={`Add task to ${project.name}`}
                           submitTitle={`Add task to ${project.name}`}
@@ -957,80 +2035,136 @@ export function MainProjectsPage() {
                             No active tasks
                           </div>
                         ) : (
-                          visibleProjectTasks.map((task) => (
-                            <div
-                              className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-start gap-2 rounded-md border border-black/10 bg-white px-3 py-2"
-                              draggable
-                              key={task.id}
-                              onDragEnd={() => setDraggingProjectTask(null)}
-                              onDragOver={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                              }}
-                              onDragStart={(event) => {
-                                event.stopPropagation();
-                                setDraggingProjectTask({ projectId: project.id, taskId: task.id });
-                              }}
-                              onDrop={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                void handleProjectTaskDrop(project.id, task.id);
-                              }}
-                            >
-                              <GripVertical className="mt-2 h-4 w-4 text-zinc-400" />
-                              <Button
-                                aria-label={task.paused ? "Resume task" : "Pause task"}
-                                className={`h-8 w-8 rounded-full p-0 ${
-                                  task.paused
-                                    ? "border-amber-300 text-amber-700 hover:bg-amber-50"
-                                    : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-                                }`}
-                                draggable={false}
-                                onDragStart={preventControlDragStart}
-                                onMouseDown={stopDragPropagation}
-                                onPointerDown={stopDragPropagation}
-                                onClick={() => void handleProjectTaskPauseToggle(task)}
-                                size="sm"
-                                title={task.paused ? "Resume task" : "Pause task"}
-                                type="button"
-                                variant="outline"
+                          visibleProjectTasks.map((task) => {
+                            const taskLocked = !canEditTask(task);
+
+                            return (
+                              <div
+                                className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-start gap-2 rounded-md border border-black/10 bg-white px-3 py-2"
+                                draggable={!taskLocked}
+                                key={task.id}
+                                onDragEnd={() => setDraggingProjectTask(null)}
+                                onDragOver={(event) => {
+                                  if (!taskLocked) {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                  }
+                                }}
+                                onDragStart={(event) => {
+                                  if (!taskLocked) {
+                                    event.stopPropagation();
+                                    setDraggingProjectTask({ projectId: project.id, taskId: task.id });
+                                  }
+                                }}
+                                onDrop={(event) => {
+                                  if (!taskLocked) {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    void handleProjectTaskDrop(project.id, task.id);
+                                  }
+                                }}
                               >
-                                {task.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
-                                <span className="sr-only">{task.paused ? "Resume task" : "Pause task"}</span>
-                              </Button>
-                              <button
-                                className="min-w-0 cursor-pointer break-words pt-1 text-left text-sm leading-relaxed hover:underline"
-                                draggable={false}
-                                onClick={() => openTaskDetails(project, task)}
-                                onMouseDown={stopDragPropagation}
-                                onPointerDown={stopDragPropagation}
-                                type="button"
-                              >
-                                {task.text}
-                              </button>
-                              <Button
-                                aria-label={`Remove task ${task.text}`}
-                                className="h-8 w-8 self-start rounded-full border-black/15 p-0 text-black/70 hover:bg-black/5 hover:text-black"
-                                draggable={false}
-                                onDragStart={preventControlDragStart}
-                                onMouseDown={stopDragPropagation}
-                                onPointerDown={stopDragPropagation}
-                                onClick={() =>
-                                  setDeleteTaskTarget({
-                                    id: task.id,
-                                    text: task.text,
-                                  })
-                                }
-                                size="sm"
-                                title={`Remove task ${task.text}`}
-                                type="button"
-                                variant="outline"
-                              >
-                                <X className="h-4 w-4" />
-                                <span className="sr-only">Remove task</span>
-                              </Button>
-                            </div>
-                          ))
+                                <GripVertical className="mt-2 h-4 w-4 text-zinc-400" />
+                                {task.status === "in_progress" ? (
+                                  <Button
+                                    aria-label="Stop task"
+                                    className="h-8 w-8 rounded-full border-orange-200 p-0 text-orange-700 hover:bg-orange-50"
+                                    draggable={false}
+                                    onDragStart={preventControlDragStart}
+                                    onMouseDown={stopDragPropagation}
+                                    onPointerDown={stopDragPropagation}
+                                    onClick={() =>
+                                      setStopTaskTarget({
+                                        id: task.id,
+                                        text: task.text,
+                                      })
+                                    }
+                                    size="sm"
+                                    title="Stop task"
+                                    type="button"
+                                    variant="outline"
+                                  >
+                                    <Square className="h-4 w-4" />
+                                    <span className="sr-only">Stop task</span>
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    aria-label={task.paused ? "Resume task" : "Pause task"}
+                                    className={`h-8 w-8 rounded-full p-0 ${
+                                      task.paused
+                                        ? "border-amber-300 text-amber-700 hover:bg-amber-50"
+                                        : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                                    }`}
+                                    disabled={taskLocked}
+                                    draggable={false}
+                                    onDragStart={preventControlDragStart}
+                                    onMouseDown={stopDragPropagation}
+                                    onPointerDown={stopDragPropagation}
+                                    onClick={() => void handleProjectTaskPauseToggle(task)}
+                                    size="sm"
+                                    title={
+                                      taskLocked
+                                        ? "Task is currently executing and cannot be changed"
+                                        : task.paused
+                                          ? "Resume task"
+                                          : "Pause task"
+                                    }
+                                    type="button"
+                                    variant="outline"
+                                  >
+                                    {task.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                                    <span className="sr-only">{task.paused ? "Resume task" : "Pause task"}</span>
+                                  </Button>
+                                )}
+                                <button
+                                  className={`min-w-0 break-words pt-1 text-left text-sm leading-relaxed ${
+                                    taskLocked
+                                      ? "cursor-not-allowed text-zinc-500"
+                                      : "cursor-pointer hover:underline"
+                                  }`}
+                                  disabled={taskLocked}
+                                  draggable={false}
+                                  onClick={() => openTaskDetails(project, task)}
+                                  onMouseDown={stopDragPropagation}
+                                  onPointerDown={stopDragPropagation}
+                                  title={
+                                    taskLocked
+                                      ? "Task is currently executing and cannot be edited"
+                                      : "Edit task"
+                                  }
+                                  type="button"
+                                >
+                                  {task.text}
+                                </button>
+                                <Button
+                                  aria-label={`Remove task ${task.text}`}
+                                  className="h-8 w-8 self-start rounded-full border-black/15 p-0 text-black/70 hover:bg-black/5 hover:text-black"
+                                  disabled={taskLocked}
+                                  draggable={false}
+                                  onDragStart={preventControlDragStart}
+                                  onMouseDown={stopDragPropagation}
+                                  onPointerDown={stopDragPropagation}
+                                  onClick={() =>
+                                    setDeleteTaskTarget({
+                                      id: task.id,
+                                      text: task.text,
+                                    })
+                                  }
+                                  size="sm"
+                                  title={
+                                    taskLocked
+                                      ? "Task is currently executing and cannot be changed"
+                                      : `Remove task ${task.text}`
+                                  }
+                                  type="button"
+                                  variant="outline"
+                                >
+                                  <X className="h-4 w-4" />
+                                  <span className="sr-only">Remove task</span>
+                                </Button>
+                              </div>
+                            );
+                          })
                         )}
                       </>
                     ) : (
@@ -1040,23 +2174,53 @@ export function MainProjectsPage() {
                       </div>
                     )}
                   </div>
-                </div>
-              </CardContent>
+                    </div>
+                  </CardContent>
+                )}
               </Card>
             </div>
           );
         })}
       </div>
 
-      <CreateProjectModal
-        onCreated={async () => {
-          await loadProjects();
-          toast.success("Project created");
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) {
+            setStopTaskTarget(null);
+          }
         }}
-        onError={(message) => setErrorMessage(message)}
-        onOpenChange={setCreateModalOpen}
-        open={createModalOpen}
-      />
+        open={Boolean(stopTaskTarget)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Stop Task</DialogTitle>
+            <DialogDescription>
+              Stop task <strong>{truncateTaskPreview(stopTaskTarget?.text ?? "")}</strong>? This will
+              terminate its current execution.
+            </DialogDescription>
+          </DialogHeader>
+          {!stopTaskTargetRunning ? (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              This task is no longer running.
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button onClick={() => setStopTaskTarget(null)} type="button" variant="outline">
+              Cancel
+            </Button>
+            <Button
+              className="bg-orange-600 text-white hover:bg-orange-700"
+              disabled={!stopTaskTargetRunning}
+              onClick={() => void handleConfirmTaskStop()}
+              type="button"
+            >
+              <Square className="h-4 w-4" />
+              Stop
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog
         onOpenChange={(open) => {
           if (!open) {
@@ -1065,7 +2229,7 @@ export function MainProjectsPage() {
         }}
         open={Boolean(deleteTaskTarget)}
       >
-        <DialogContent>
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Delete Task</DialogTitle>
             <DialogDescription>
@@ -1073,13 +2237,51 @@ export function MainProjectsPage() {
               cannot be undone.
             </DialogDescription>
           </DialogHeader>
+          {deleteTaskTargetLocked ? (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Task is currently in execution and cannot be changed.
+            </div>
+          ) : null}
           <DialogFooter>
             <Button onClick={() => setDeleteTaskTarget(null)} type="button" variant="outline">
               Cancel
             </Button>
             <Button
               className="bg-red-600 text-white hover:bg-red-700"
+              disabled={deleteTaskTargetLocked}
               onClick={() => void handleConfirmTaskDelete()}
+              type="button"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteProjectTarget(null);
+          }
+        }}
+        open={Boolean(deleteProjectTarget)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete Project</DialogTitle>
+            <DialogDescription>
+              Delete project <strong>{deleteProjectTarget?.name ?? ""}</strong>? This action cannot be
+              undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setDeleteProjectTarget(null)} type="button" variant="outline">
+              Cancel
+            </Button>
+            <Button
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={() => void handleConfirmProjectDelete()}
               type="button"
             >
               <Trash2 className="h-4 w-4" />
@@ -1097,7 +2299,7 @@ export function MainProjectsPage() {
         }}
         open={Boolean(deleteSubprojectTarget)}
       >
-        <DialogContent>
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Delete Subproject</DialogTitle>
             <DialogDescription>
@@ -1170,12 +2372,21 @@ export function MainProjectsPage() {
                   </option>
                 ))}
               </Select>
-              <Input
+              <Select
                 disabled={!taskDetailsTarget || !canEditTask(taskDetailsTarget.task)}
                 onChange={(event) => setTaskDetailsReasoning(event.target.value)}
-                placeholder="Reasoning"
                 value={taskDetailsReasoning}
-              />
+              >
+                {!TASK_REASONING_OPTIONS.some((option) => option.value === taskDetailsReasoning) &&
+                taskDetailsReasoning.trim().length > 0 ? (
+                  <option value={taskDetailsReasoning}>{taskDetailsReasoning}</option>
+                ) : null}
+                {TASK_REASONING_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
             </div>
             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
               <label className="flex h-10 items-center gap-2 rounded-md border border-black/15 px-3 text-sm">

@@ -22,6 +22,8 @@ function stringifyMetadata(value: Prisma.JsonValue | null): string | null {
 function toProjectEntity(project: {
   createdAt: Date;
   id: string;
+  iconPath: string | null;
+  mainPageCollapsed: boolean;
   mainPageSubprojectsVisible: boolean;
   mainPageTasksVisible: boolean;
   metadata: Prisma.JsonValue | null;
@@ -34,6 +36,8 @@ function toProjectEntity(project: {
   return {
     createdAt: project.createdAt.toISOString(),
     id: project.id,
+    iconPath: project.iconPath,
+    mainPageCollapsed: project.mainPageCollapsed,
     mainPageSubprojectsVisible: project.mainPageSubprojectsVisible,
     mainPageTasksVisible: project.mainPageTasksVisible,
     metadata: stringifyMetadata(project.metadata),
@@ -194,6 +198,37 @@ export async function listProjects(): Promise<ProjectEntity[]> {
   return projects.map(toProjectEntity);
 }
 
+export async function getProjectPathById(projectId: string): Promise<string | null> {
+  const project = await prisma.project.findUnique({
+    select: { path: true },
+    where: { id: projectId },
+  });
+
+  return project?.path ?? null;
+}
+
+export async function getProjectIconInfoById(projectId: string): Promise<{
+  iconPath: string | null;
+  path: string;
+} | null> {
+  const project = await prisma.project.findUnique({
+    select: {
+      iconPath: true,
+      path: true,
+    },
+    where: { id: projectId },
+  });
+
+  if (!project) {
+    return null;
+  }
+
+  return {
+    iconPath: project.iconPath,
+    path: project.path,
+  };
+}
+
 export async function listProjectTree(): Promise<
   Array<
     ProjectEntity & {
@@ -254,6 +289,7 @@ export async function createProject(input: {
 export async function updateProject(
   projectId: string,
   input: Partial<{
+    mainPageCollapsed: boolean;
     mainPageSubprojectsVisible: boolean;
     mainPageTasksVisible: boolean;
     metadata: string;
@@ -267,6 +303,7 @@ export async function updateProject(
   }
 
   const updateData: Prisma.ProjectUpdateInput = {
+    mainPageCollapsed: input.mainPageCollapsed,
     mainPageSubprojectsVisible: input.mainPageSubprojectsVisible,
     mainPageTasksVisible: input.mainPageTasksVisible,
     metadata: input.metadata ? parseMetadata(input.metadata) : undefined,
@@ -297,6 +334,18 @@ export async function updateProject(
     where: {
       id: projectId,
     },
+  });
+  publishAppSync("project.updated");
+  return toProjectEntity(project);
+}
+
+export async function setProjectIconPath(
+  projectId: string,
+  iconPath: string | null,
+): Promise<ProjectEntity> {
+  const project = await prisma.project.update({
+    data: { iconPath },
+    where: { id: projectId },
   });
   publishAppSync("project.updated");
   return toProjectEntity(project);
