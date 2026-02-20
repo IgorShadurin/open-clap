@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import Image from "next/image";
 import {
   ArrowDown,
   ArrowUp,
@@ -1100,9 +1099,9 @@ export function MainProjectsPage() {
   };
 
   const codexConnectionInfo = [
-    `auth file: ${codexResolvedAuthFilePath}`,
-    `endpoint: ${codexUsageEndpoint ?? "n/a"}`,
-    `checked: ${
+    `Auth file: ${codexResolvedAuthFilePath}`,
+    `Endpoint: ${codexUsageEndpoint ?? "n/a"}`,
+    `Checked: ${
       codexUsageCheckedAt ? new Date(codexUsageCheckedAt).toLocaleString() : "n/a"
     }`,
   ].join("\n");
@@ -1140,10 +1139,10 @@ export function MainProjectsPage() {
                 </button>
                 {codexInfoOpen ? (
                   <div className="absolute right-0 z-30 mt-2 w-[300px] space-y-1 rounded-md border border-black/10 bg-white p-3 text-xs text-zinc-700 shadow-lg">
-                    <div>auth file: {codexResolvedAuthFilePath}</div>
-                    <div>endpoint: {codexUsageEndpoint ?? "n/a"}</div>
+                    <div>Auth file: {codexResolvedAuthFilePath}</div>
+                    <div>Endpoint: {codexUsageEndpoint ?? "n/a"}</div>
                     <div>
-                      checked:{" "}
+                      Checked:{" "}
                       {codexUsageCheckedAt
                         ? new Date(codexUsageCheckedAt).toLocaleString()
                         : "n/a"}
@@ -1276,7 +1275,7 @@ export function MainProjectsPage() {
           const hasUploadedIcon = Boolean(project.iconPath);
           const projectIconCacheBust = projectIconCacheBustByProjectId[project.id] ?? 0;
           const projectIconVersion = `${project.updatedAt}:${hasUploadedIcon ? "uploaded" : "project"}:${projectIconCacheBust}`;
-          const projectIconSource = `/api/projects/${project.id}/icon`;
+          const projectIconSource = `/api/projects/${project.id}/icon?v=${encodeURIComponent(projectIconVersion)}`;
           const showFallbackAvatar = projectIconLoadErrors[project.id] ?? false;
           const visibleProjectTasks = project.tasks.filter((task) => !isFinishedTask(task));
           return (
@@ -1359,14 +1358,15 @@ export function MainProjectsPage() {
                                   : "rounded-none border-0 bg-transparent shadow-none ring-0"
                               }`}
                             >
-                              <Image
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
                                 alt=""
                                 aria-hidden="true"
                                 className={`h-full w-full ${hasUploadedIcon ? "object-cover" : "object-contain"}`}
+                                decoding="async"
                                 draggable={false}
                                 height={36}
-                                key={`${project.id}:${projectIconVersion}`}
-                                unoptimized
+                                loading="eager"
                                 onError={() => {
                                   setProjectIconLoadErrors((previous) => ({
                                     ...previous,

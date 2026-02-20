@@ -36,7 +36,7 @@ export async function GET(
       const icon = await readFile(uploadedIconPath);
       return new NextResponse(icon, {
         headers: {
-          "Cache-Control": "no-store",
+          "Cache-Control": "private, max-age=300, stale-while-revalidate=60",
           "Content-Type": resolveImageContentType(uploadedIconPath),
         },
         status: 200,
@@ -55,7 +55,7 @@ export async function GET(
     const icon = await readFile(iconPath);
     return new NextResponse(icon, {
       headers: {
-        "Cache-Control": "no-store",
+        "Cache-Control": "private, max-age=300, stale-while-revalidate=60",
         "Content-Type": resolveImageContentType(iconPath),
       },
       status: 200,
