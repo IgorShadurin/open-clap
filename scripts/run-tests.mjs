@@ -53,10 +53,13 @@ function runCommand(command, args, env) {
 async function runTestFile(filePath) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclap-test-"));
   const sqliteDbPath = path.join(tempDir, "test.sqlite");
+  const daemonLogFilePath = path.join(tempDir, "logs", "daemon.log");
   const env = {
     ...process.env,
     DATABASE_URL: `file:${sqliteDbPath}`,
+    DAEMON_LOG_FILE: daemonLogFilePath,
     NODE_ENV: "test",
+    OPENCLAP_TEST_TMPDIR: tempDir,
     PRISMA_HIDE_UPDATE_MESSAGE: "1",
     SQLITE_DB_PATH: sqliteDbPath,
   };

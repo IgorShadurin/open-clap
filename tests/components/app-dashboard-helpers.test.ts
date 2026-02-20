@@ -34,10 +34,10 @@ test("extractApiErrorMessage falls back to status when payload is missing", () =
   assert.equal(extractApiErrorMessage(500), "Request failed with status 500");
 });
 
-test("buildTaskScopeHref creates project and subproject routes", () => {
+test("buildTaskScopeHref always points to the project tasks page", () => {
   assert.equal(buildTaskScopeHref("project_1"), "/projects/project_1/tasks");
   assert.equal(
     buildTaskScopeHref("project_1", "subproject A"),
-    "/projects/project_1/tasks?subprojectId=subproject%20A",
+    "/projects/project_1/tasks",
   );
 });

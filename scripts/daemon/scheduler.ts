@@ -1,7 +1,26 @@
 export class TaskScheduler {
   private readonly activeTaskIds = new Set<string>();
+  private maxParallelTasks: number;
 
-  public constructor(private readonly maxParallelTasks: number) {}
+  public constructor(maxParallelTasks: number) {
+    this.maxParallelTasks = this.normalizeMaxParallelTasks(maxParallelTasks);
+  }
+
+  private normalizeMaxParallelTasks(value: number): number {
+    if (!Number.isFinite(value)) {
+      return 1;
+    }
+
+    return Math.max(1, Math.floor(value));
+  }
+
+  public setMaxParallelTasks(value: number): void {
+    this.maxParallelTasks = this.normalizeMaxParallelTasks(value);
+  }
+
+  public getMaxParallelTasks(): number {
+    return this.maxParallelTasks;
+  }
 
   public activeCount(): number {
     return this.activeTaskIds.size;

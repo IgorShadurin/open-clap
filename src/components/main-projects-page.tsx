@@ -4,9 +4,10 @@ import Link from "next/link";
 import {
   ArrowDown,
   ArrowUp,
+  ChevronDown,
+  ChevronUp,
   EyeOff,
   FolderGit2,
-  FolderPlus,
   GripVertical,
   Hand,
   ListTodo,
@@ -14,19 +15,28 @@ import {
   Play,
   Plus,
   Save,
-  Send,
   Settings,
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+
+import {
+  DEFAULT_TASK_MODEL,
+  DEFAULT_TASK_REASONING,
+  TASK_MODEL_OPTIONS,
+} from "@/lib/task-reasoning";
 
 import type { ProjectEntity, SubprojectEntity, TaskEntity } from "../../shared/contracts";
 import { buildTaskScopeHref, canEditTask, requestJson } from "./app-dashboard-helpers";
 import { CreateProjectModal } from "./create-project-modal";
-import { CreateSubprojectModal } from "./create-subproject-modal";
+import {
+  SubprojectQuickAdd,
+  type SubprojectQuickAddPayload,
+} from "./subproject-quick-add";
+import { TaskQuickAdd, type TaskQuickAddPayload } from "./task-quick-add";
+import { useRealtimeSync } from "./use-realtime-sync";
 import { Checkbox } from "./ui/checkbox";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -39,6 +49,7 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
+import { Select } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 
 type SubprojectWithTasks = SubprojectEntity & { tasks: TaskEntity[] };
@@ -50,8 +61,6 @@ type ProjectTree = ProjectEntity & {
 const DUMMY_CODEX_CONNECTED = true;
 const DUMMY_WEEKLY_LIMIT_USED_PERCENT = 64;
 const DUMMY_FIVE_HOUR_LIMIT_USED_PERCENT = 38;
-const DEFAULT_TASK_MODEL = "gpt-5.3-codex";
-const DEFAULT_TASK_REASONING = "high";
 
 function progressWidth(percent: number): string {
   const normalized = Math.max(0, Math.min(100, Math.floor(percent)));
@@ -83,32 +92,16 @@ function truncateTaskPreview(text: string, limit = 100): string {
   return `${normalized.slice(0, limit).trimEnd()}...`;
 }
 
+function isFinishedTask(task: TaskEntity): boolean {
+  return task.status === "done" || task.status === "failed" || task.status === "stopped";
+}
+
 function isProjectTasksVisibleOnMainPage(project: ProjectTree): boolean {
   return project.mainPageTasksVisible;
 }
 
 function isProjectSubprojectsVisibleOnMainPage(project: ProjectTree): boolean {
   return project.mainPageSubprojectsVisible;
-}
-
-interface InlineTaskDraft {
-  contextCount: number;
-  includeContext: boolean;
-  model: string;
-  reasoning: string;
-  settingsExpanded: boolean;
-  text: string;
-}
-
-function createDefaultInlineTaskDraft(): InlineTaskDraft {
-  return {
-    contextCount: 0,
-    includeContext: false,
-    model: DEFAULT_TASK_MODEL,
-    reasoning: DEFAULT_TASK_REASONING,
-    settingsExpanded: false,
-    text: "",
-  };
 }
 
 export function MainProjectsPage() {
@@ -126,11 +119,6 @@ export function MainProjectsPage() {
     projectId: string;
     taskId: string;
   } | null>(null);
-  const [createSubprojectTarget, setCreateSubprojectTarget] = useState<{
-    id: string;
-    name: string;
-    path: string;
-  } | null>(null);
   const [deleteTaskTarget, setDeleteTaskTarget] = useState<{
     id: string;
     text: string;
@@ -139,7 +127,9 @@ export function MainProjectsPage() {
     id: string;
     name: string;
   } | null>(null);
-  const [inlineTaskDrafts, setInlineTaskDrafts] = useState<Record<string, InlineTaskDraft>>({});
+  const [expandedSubprojectTasks, setExpandedSubprojectTasks] = useState<
+    Record<string, boolean>
+  >({});
   const [taskDetailsTarget, setTaskDetailsTarget] = useState<{
     projectName: string;
     task: TaskEntity;
@@ -150,7 +140,6 @@ export function MainProjectsPage() {
   const [taskDetailsIncludeContext, setTaskDetailsIncludeContext] = useState(false);
   const [taskDetailsContextCount, setTaskDetailsContextCount] = useState(0);
   const [taskDetailsSubmitting, setTaskDetailsSubmitting] = useState(false);
-  const inlineTaskFormRefs = useRef<Record<string, HTMLFormElement | null>>({});
 
   const stopDragPropagation = (event: { stopPropagation: () => void }) => {
     event.stopPropagation();
@@ -164,15 +153,20 @@ export function MainProjectsPage() {
     event.stopPropagation();
   };
 
-  const loadProjects = useCallback(async () => {
-    setLoading(true);
+  const loadProjects = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setLoading(true);
+    }
+
     try {
       const tree = await requestJson<ProjectTree[]>("/api/projects/tree");
       setProjects(tree);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to load projects");
     } finally {
-      setLoading(false);
+      if (!options?.silent) {
+        setLoading(false);
+      }
       setHasLoadedOnce(true);
     }
   }, []);
@@ -181,45 +175,9 @@ export function MainProjectsPage() {
     void loadProjects();
   }, [loadProjects]);
 
-  useEffect(() => {
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (!target) {
-        return;
-      }
-
-      setInlineTaskDrafts((current) => {
-        let changed = false;
-        const next: Record<string, InlineTaskDraft> = {};
-
-        for (const [projectId, draft] of Object.entries(current)) {
-          if (!draft.settingsExpanded) {
-            next[projectId] = draft;
-            continue;
-          }
-
-          const formElement = inlineTaskFormRefs.current[projectId];
-          if (formElement && formElement.contains(target)) {
-            next[projectId] = draft;
-            continue;
-          }
-
-          changed = true;
-          next[projectId] = {
-            ...draft,
-            settingsExpanded: false,
-          };
-        }
-
-        return changed ? next : current;
-      });
-    };
-
-    document.addEventListener("mousedown", handlePointerDown);
-    return () => {
-      document.removeEventListener("mousedown", handlePointerDown);
-    };
-  }, []);
+  useRealtimeSync(() => {
+    void loadProjects({ silent: true });
+  });
 
   const handleProjectDrop = async (targetProjectId: string) => {
     if (!draggingProjectId || draggingProjectId === targetProjectId) {
@@ -353,68 +311,63 @@ export function MainProjectsPage() {
     }
   };
 
-  const getInlineTaskDraft = (projectId: string): InlineTaskDraft =>
-    inlineTaskDrafts[projectId] ?? createDefaultInlineTaskDraft();
-
-  const updateInlineTaskDraft = (
-    projectId: string,
-    patch: Partial<InlineTaskDraft>,
+  const handleQuickTaskCreate = async (
+    project: ProjectTree,
+    payload: TaskQuickAddPayload,
+    subprojectId: string | null = null,
   ) => {
-    setInlineTaskDrafts((current) => ({
-      ...current,
-      [projectId]: {
-        ...(current[projectId] ?? createDefaultInlineTaskDraft()),
-        ...patch,
-      },
-    }));
-  };
-
-  const handleInlineTaskSubmit = async (project: ProjectTree) => {
-    const draft = getInlineTaskDraft(project.id);
-    const text = draft.text.trim();
-    if (text.length < 1) {
-      return;
-    }
-
     try {
       await requestJson("/api/tasks", {
         body: JSON.stringify({
-          includePreviousContext: draft.includeContext,
-          model: draft.model.trim() || DEFAULT_TASK_MODEL,
-          previousContextMessages: draft.includeContext ? draft.contextCount : 0,
+          includePreviousContext: payload.includeContext,
+          model: payload.model.trim() || DEFAULT_TASK_MODEL,
+          previousContextMessages: payload.includeContext ? payload.contextCount : 0,
           projectId: project.id,
-          reasoning: draft.reasoning.trim() || DEFAULT_TASK_REASONING,
-          subprojectId: null,
-          text,
+          reasoning: payload.reasoning.trim() || DEFAULT_TASK_REASONING,
+          subprojectId,
+          text: payload.text.trim(),
         }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       });
       await loadProjects();
-      setInlineTaskDrafts((current) => ({
-        ...current,
-        [project.id]: createDefaultInlineTaskDraft(),
-      }));
       toast.success("Task created");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to create task");
     }
   };
 
-  const handleInlineTaskTextInputKeyDown = (
-    event: KeyboardEvent<HTMLInputElement>,
+  const getSubprojectTasksKey = (projectId: string, subprojectId: string): string =>
+    `${projectId}:${subprojectId}`;
+
+  const toggleSubprojectTasks = (projectId: string, subprojectId: string) => {
+    const key = getSubprojectTasksKey(projectId, subprojectId);
+    setExpandedSubprojectTasks((current) => ({
+      ...current,
+      [key]: !current[key],
+    }));
+  };
+
+  const handleQuickSubprojectCreate = async (
     project: ProjectTree,
+    payload: SubprojectQuickAddPayload,
   ) => {
-    if (event.key !== "Tab" || event.shiftKey) {
-      return;
+    try {
+      await requestJson("/api/subprojects", {
+        body: JSON.stringify({
+          metadata: payload.metadata || undefined,
+          name: payload.name,
+          path: payload.path || project.path,
+          projectId: project.id,
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+      await loadProjects();
+      toast.success("Subproject created");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to create subproject");
     }
-
-    if (event.currentTarget.value.trim().length < 1) {
-      return;
-    }
-
-    event.preventDefault();
-    void handleInlineTaskSubmit(project);
   };
 
   const handleProjectTasksListToggle = async (project: ProjectTree) => {
@@ -506,7 +459,7 @@ export function MainProjectsPage() {
     }
 
     const currentOrder = project.tasks
-      .filter((task) => task.status !== "done")
+      .filter((task) => !isFinishedTask(task))
       .map((task) => task.id);
     const fromIndex = currentOrder.findIndex((id) => id === draggingProjectTask.taskId);
     const toIndex = currentOrder.findIndex((id) => id === targetTaskId);
@@ -654,7 +607,7 @@ export function MainProjectsPage() {
         {projects.map((project) => {
           const projectTasksVisible = isProjectTasksVisibleOnMainPage(project);
           const projectSubprojectsVisible = isProjectSubprojectsVisibleOnMainPage(project);
-          const visibleProjectTasks = project.tasks.filter((task) => task.status !== "done");
+          const visibleProjectTasks = project.tasks.filter((task) => !isFinishedTask(task));
           return (
             <div
               className="cursor-grab active:cursor-grabbing"
@@ -704,28 +657,6 @@ export function MainProjectsPage() {
                   <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2">
                       <div className="inline-flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-zinc-500">
-                        <Button
-                          aria-label={`Create subproject in ${project.name}`}
-                          className="h-8 w-8 rounded-full p-0"
-                          draggable={false}
-                          onDragStart={preventControlDragStart}
-                          onMouseDown={stopDragPropagation}
-                          onPointerDown={stopDragPropagation}
-                          onClick={() =>
-                            setCreateSubprojectTarget({
-                              id: project.id,
-                              name: project.name,
-                              path: project.path,
-                            })
-                          }
-                          size="sm"
-                          title={`Create subproject in ${project.name}`}
-                          type="button"
-                          variant="outline"
-                        >
-                          <FolderPlus className="h-4 w-4" />
-                          <span className="sr-only">Create subproject</span>
-                        </Button>
                         <FolderGit2 className="h-3.5 w-3.5" />
                         <span>Subprojects</span>
                       </div>
@@ -753,86 +684,231 @@ export function MainProjectsPage() {
                       </Button>
                     </div>
                     {projectSubprojectsVisible ? (
-                      project.subprojects.length < 1 ? (
-                        <div className="rounded-md border border-dashed border-black/15 px-3 py-2 text-sm text-zinc-500">
-                          No subprojects
-                        </div>
-                      ) : (
-                        project.subprojects.map((subproject) => (
-                          <div
-                            className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-black/10 bg-white px-3 py-2"
-                            draggable
-                            key={subproject.id}
-                            onDragEnd={() => setDraggingSubproject(null)}
-                            onDragOver={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                            }}
-                            onDragStart={(event) => {
-                              event.stopPropagation();
-                              setDraggingSubproject({ projectId: project.id, subprojectId: subproject.id });
-                            }}
-                            onDrop={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              void handleSubprojectDrop(project.id, subproject.id);
-                            }}
-                          >
-                            <div className="flex items-center gap-2">
-                              <GripVertical className="h-4 w-4 text-zinc-400" />
-                              <Button
-                                aria-label={subproject.paused ? "Resume subproject" : "Pause subproject"}
-                                className={`h-8 w-8 rounded-full p-0 ${
-                                  subproject.paused
-                                    ? "border-amber-300 text-amber-700 hover:bg-amber-50"
-                                    : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-                                }`}
-                                draggable={false}
-                                onDragStart={preventControlDragStart}
-                                onMouseDown={stopDragPropagation}
-                                onPointerDown={stopDragPropagation}
-                                onClick={() => void handleSubprojectPauseToggle(subproject)}
-                                size="sm"
-                                title={subproject.paused ? "Resume subproject" : "Pause subproject"}
-                                type="button"
-                                variant="outline"
-                              >
-                                {subproject.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
-                                <span className="sr-only">
-                                  {subproject.paused ? "Resume subproject" : "Pause subproject"}
-                                </span>
-                              </Button>
-                              <Link
-                                className="font-medium underline-offset-4 hover:underline"
-                                href={buildTaskScopeHref(project.id, subproject.id)}
-                              >
-                                {subproject.name}
-                              </Link>
-                            </div>
-                            <Button
-                              aria-label={`Delete subproject ${subproject.name}`}
-                              className="h-8 w-8 rounded-full border-black/15 p-0 text-black/70 hover:bg-black/5 hover:text-black"
-                              draggable={false}
-                              onDragStart={preventControlDragStart}
-                              onMouseDown={stopDragPropagation}
-                              onPointerDown={stopDragPropagation}
-                              onClick={() =>
-                                setDeleteSubprojectTarget({
-                                  id: subproject.id,
-                                  name: subproject.name,
-                                })
-                              }
-                              size="sm"
-                              title={`Delete subproject ${subproject.name}`}
-                              type="button"
-                              variant="outline"
-                            >
-                              <X className="h-4 w-4" />
-                              <span className="sr-only">Delete subproject</span>
-                            </Button>
+                      <>
+                        <SubprojectQuickAdd
+                          defaultPath={project.path}
+                          onSubmit={(payload) => handleQuickSubprojectCreate(project, payload)}
+                          stopPropagation
+                          submitAriaLabel={`Create subproject in ${project.name}`}
+                          submitTitle={`Create subproject in ${project.name}`}
+                        />
+                        {project.subprojects.length < 1 ? (
+                          <div className="rounded-md border border-dashed border-black/15 px-3 py-2 text-sm text-zinc-500">
+                            No subprojects
                           </div>
-                        ))
-                      )
+                        ) : (
+                          project.subprojects.map((subproject) => {
+                            const activeSubprojectTasks = subproject.tasks.filter(
+                              (task) => !isFinishedTask(task),
+                            );
+                            const subprojectTasksExpanded =
+                              expandedSubprojectTasks[
+                                getSubprojectTasksKey(project.id, subproject.id)
+                              ] ?? false;
+
+                            return (
+                              <div
+                                className="rounded-md border border-black/10 bg-white"
+                                draggable
+                                key={subproject.id}
+                                onDragEnd={() => setDraggingSubproject(null)}
+                                onDragOver={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                }}
+                                onDragStart={(event) => {
+                                  event.stopPropagation();
+                                  setDraggingSubproject({
+                                    projectId: project.id,
+                                    subprojectId: subproject.id,
+                                  });
+                                }}
+                                onDrop={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  void handleSubprojectDrop(project.id, subproject.id);
+                                }}
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
+                                  <div className="flex items-center gap-2">
+                                    <GripVertical className="h-4 w-4 text-zinc-400" />
+                                    <Button
+                                      aria-label={subproject.paused ? "Resume subproject" : "Pause subproject"}
+                                      className={`h-8 w-8 rounded-full p-0 ${
+                                        subproject.paused
+                                          ? "border-amber-300 text-amber-700 hover:bg-amber-50"
+                                          : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                                      }`}
+                                      draggable={false}
+                                      onDragStart={preventControlDragStart}
+                                      onMouseDown={stopDragPropagation}
+                                      onPointerDown={stopDragPropagation}
+                                      onClick={() => void handleSubprojectPauseToggle(subproject)}
+                                      size="sm"
+                                      title={subproject.paused ? "Resume subproject" : "Pause subproject"}
+                                      type="button"
+                                      variant="outline"
+                                    >
+                                      {subproject.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                                      <span className="sr-only">
+                                        {subproject.paused ? "Resume subproject" : "Pause subproject"}
+                                      </span>
+                                    </Button>
+                                    <button
+                                      className="font-medium text-left underline-offset-4 hover:underline"
+                                      draggable={false}
+                                      onMouseDown={stopDragPropagation}
+                                      onPointerDown={stopDragPropagation}
+                                      onClick={() =>
+                                        toggleSubprojectTasks(project.id, subproject.id)
+                                      }
+                                      type="button"
+                                    >
+                                      {subproject.name}
+                                    </button>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Button
+                                      aria-label={
+                                        subprojectTasksExpanded
+                                          ? `Hide tasks for ${subproject.name}`
+                                          : `Show tasks for ${subproject.name}`
+                                      }
+                                      className="h-8 w-8 rounded-full p-0"
+                                      draggable={false}
+                                      onDragStart={preventControlDragStart}
+                                      onMouseDown={stopDragPropagation}
+                                      onPointerDown={stopDragPropagation}
+                                      onClick={() =>
+                                        toggleSubprojectTasks(project.id, subproject.id)
+                                      }
+                                      size="sm"
+                                      title={
+                                        subprojectTasksExpanded
+                                          ? `Hide tasks for ${subproject.name}`
+                                          : `Show tasks for ${subproject.name}`
+                                      }
+                                      type="button"
+                                      variant="outline"
+                                    >
+                                      {subprojectTasksExpanded ? (
+                                        <ChevronUp className="h-4 w-4" />
+                                      ) : (
+                                        <ChevronDown className="h-4 w-4" />
+                                      )}
+                                      <span className="sr-only">
+                                        {subprojectTasksExpanded
+                                          ? `Hide tasks for ${subproject.name}`
+                                          : `Show tasks for ${subproject.name}`}
+                                      </span>
+                                    </Button>
+                                    <Button
+                                      aria-label={`Delete subproject ${subproject.name}`}
+                                      className="h-8 w-8 rounded-full border-black/15 p-0 text-black/70 hover:bg-black/5 hover:text-black"
+                                      draggable={false}
+                                      onDragStart={preventControlDragStart}
+                                      onMouseDown={stopDragPropagation}
+                                      onPointerDown={stopDragPropagation}
+                                      onClick={() =>
+                                        setDeleteSubprojectTarget({
+                                          id: subproject.id,
+                                          name: subproject.name,
+                                        })
+                                      }
+                                      size="sm"
+                                      title={`Delete subproject ${subproject.name}`}
+                                      type="button"
+                                      variant="outline"
+                                    >
+                                      <X className="h-4 w-4" />
+                                      <span className="sr-only">Delete subproject</span>
+                                    </Button>
+                                  </div>
+                                </div>
+
+                                {subprojectTasksExpanded ? (
+                                  <div className="space-y-2 border-t border-black/10 p-2">
+                                    <TaskQuickAdd
+                                      onSubmit={(payload) =>
+                                        handleQuickTaskCreate(project, payload, subproject.id)
+                                      }
+                                      placeholder={`Add task to ${subproject.name}`}
+                                      stopPropagation
+                                      submitAriaLabel={`Add task to ${subproject.name}`}
+                                      submitTitle={`Add task to ${subproject.name}`}
+                                    />
+                                    {activeSubprojectTasks.length < 1 ? (
+                                      <div className="rounded-md border border-dashed border-black/15 px-3 py-2 text-sm text-zinc-500">
+                                        No active tasks in this subproject
+                                      </div>
+                                    ) : (
+                                      activeSubprojectTasks.map((task) => (
+                                        <div
+                                          className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-start gap-2 rounded-md border border-black/10 bg-white px-3 py-2"
+                                          key={task.id}
+                                        >
+                                          <GripVertical className="mt-2 h-4 w-4 text-zinc-400" />
+                                          <Button
+                                            aria-label={task.paused ? "Resume task" : "Pause task"}
+                                            className={`h-8 w-8 rounded-full p-0 ${
+                                              task.paused
+                                                ? "border-amber-300 text-amber-700 hover:bg-amber-50"
+                                                : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                                            }`}
+                                            draggable={false}
+                                            onDragStart={preventControlDragStart}
+                                            onMouseDown={stopDragPropagation}
+                                            onPointerDown={stopDragPropagation}
+                                            onClick={() => void handleProjectTaskPauseToggle(task)}
+                                            size="sm"
+                                            title={task.paused ? "Resume task" : "Pause task"}
+                                            type="button"
+                                            variant="outline"
+                                          >
+                                            {task.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                                            <span className="sr-only">{task.paused ? "Resume task" : "Pause task"}</span>
+                                          </Button>
+                                          <button
+                                            className="min-w-0 cursor-pointer break-words pt-1 text-left text-sm leading-relaxed hover:underline"
+                                            draggable={false}
+                                            onClick={() => openTaskDetails(project, task)}
+                                            onMouseDown={stopDragPropagation}
+                                            onPointerDown={stopDragPropagation}
+                                            type="button"
+                                          >
+                                            {task.text}
+                                          </button>
+                                          <Button
+                                            aria-label={`Remove task ${task.text}`}
+                                            className="h-8 w-8 self-start rounded-full border-black/15 p-0 text-black/70 hover:bg-black/5 hover:text-black"
+                                            draggable={false}
+                                            onDragStart={preventControlDragStart}
+                                            onMouseDown={stopDragPropagation}
+                                            onPointerDown={stopDragPropagation}
+                                            onClick={() =>
+                                              setDeleteTaskTarget({
+                                                id: task.id,
+                                                text: task.text,
+                                              })
+                                            }
+                                            size="sm"
+                                            title={`Remove task ${task.text}`}
+                                            type="button"
+                                            variant="outline"
+                                          >
+                                            <X className="h-4 w-4" />
+                                            <span className="sr-only">Remove task</span>
+                                          </Button>
+                                        </div>
+                                      ))
+                                    )}
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })
+                        )}
+                      </>
                     ) : (
                       <div className="flex items-center gap-2 rounded-md border border-dashed border-amber-300 bg-amber-50/70 px-3 py-2 text-sm text-amber-800">
                         <EyeOff className="h-4 w-4" />
@@ -868,102 +944,13 @@ export function MainProjectsPage() {
                     </div>
                     {projectTasksVisible ? (
                       <>
-                        <form
-                          className="relative rounded-md border border-black/10 bg-white px-3 py-2"
-                          ref={(element) => {
-                            inlineTaskFormRefs.current[project.id] = element;
-                          }}
-                          onMouseDown={stopDragPropagation}
-                          onPointerDown={stopDragPropagation}
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            void handleInlineTaskSubmit(project);
-                          }}
-                        >
-                          <div className="flex items-center gap-2">
-                            <Input
-                              className="h-9 text-sm"
-                              onChange={(event) =>
-                                updateInlineTaskDraft(project.id, { text: event.target.value })
-                              }
-                              onFocus={() =>
-                                updateInlineTaskDraft(project.id, { settingsExpanded: true })
-                              }
-                              onKeyDown={(event) =>
-                                handleInlineTaskTextInputKeyDown(event, project)
-                              }
-                              placeholder="Add task"
-                              value={getInlineTaskDraft(project.id).text}
-                            />
-                            <Button
-                              aria-label={`Add task to ${project.name}`}
-                              className="h-9 w-9 shrink-0 p-0"
-                              draggable={false}
-                              onDragStart={preventControlDragStart}
-                              onMouseDown={stopDragPropagation}
-                              onPointerDown={stopDragPropagation}
-                              title={`Add task to ${project.name}`}
-                              type="submit"
-                            >
-                              <Send className="h-4 w-4" />
-                            </Button>
-                          </div>
-                          {getInlineTaskDraft(project.id).settingsExpanded ? (
-                            <div className="absolute left-0 right-0 top-full z-20 mt-2 grid grid-cols-1 gap-2 rounded-md border border-black/15 bg-white p-2 shadow-lg md:grid-cols-4">
-                              <Input
-                                className="h-9 text-sm"
-                                onChange={(event) =>
-                                  updateInlineTaskDraft(project.id, { model: event.target.value })
-                                }
-                                onFocus={() =>
-                                  updateInlineTaskDraft(project.id, { settingsExpanded: true })
-                                }
-                                placeholder="Model"
-                                value={getInlineTaskDraft(project.id).model}
-                              />
-                              <Input
-                                className="h-9 text-sm"
-                                onChange={(event) =>
-                                  updateInlineTaskDraft(project.id, {
-                                    reasoning: event.target.value,
-                                  })
-                                }
-                                onFocus={() =>
-                                  updateInlineTaskDraft(project.id, { settingsExpanded: true })
-                                }
-                                placeholder="Reasoning"
-                                value={getInlineTaskDraft(project.id).reasoning}
-                              />
-                              <label className="flex h-9 items-center gap-2 rounded-md border border-black/15 px-3 text-sm">
-                                <Checkbox
-                                  checked={getInlineTaskDraft(project.id).includeContext}
-                                  onCheckedChange={(checked) =>
-                                    updateInlineTaskDraft(project.id, {
-                                      includeContext: Boolean(checked),
-                                    })
-                                  }
-                                />
-                                <span>Include context</span>
-                              </label>
-                              <Input
-                                className="h-9 text-sm"
-                                disabled={!getInlineTaskDraft(project.id).includeContext}
-                                min={0}
-                                onChange={(event) =>
-                                  updateInlineTaskDraft(project.id, {
-                                    contextCount: Number.parseInt(event.target.value || "0", 10),
-                                  })
-                                }
-                                onFocus={() =>
-                                  updateInlineTaskDraft(project.id, { settingsExpanded: true })
-                                }
-                                placeholder="Messages count"
-                                type="number"
-                                value={getInlineTaskDraft(project.id).contextCount}
-                              />
-                            </div>
-                          ) : null}
-                        </form>
+                        <TaskQuickAdd
+                          onSubmit={(payload) => handleQuickTaskCreate(project, payload)}
+                          placeholder="Add task"
+                          stopPropagation
+                          submitAriaLabel={`Add task to ${project.name}`}
+                          submitTitle={`Add task to ${project.name}`}
+                        />
 
                         {visibleProjectTasks.length < 1 ? (
                           <div className="rounded-md border border-dashed border-black/15 px-3 py-2 text-sm text-zinc-500">
@@ -1070,25 +1057,6 @@ export function MainProjectsPage() {
         onOpenChange={setCreateModalOpen}
         open={createModalOpen}
       />
-      {createSubprojectTarget ? (
-        <CreateSubprojectModal
-          defaultPath={createSubprojectTarget.path}
-          onCreated={async () => {
-            await loadProjects();
-            toast.success("Subproject created");
-          }}
-          onError={(message) => setErrorMessage(message)}
-          onOpenChange={(open) => {
-            if (!open) {
-              setCreateSubprojectTarget(null);
-            }
-          }}
-          open={Boolean(createSubprojectTarget)}
-          projectId={createSubprojectTarget.id}
-          projectName={createSubprojectTarget.name}
-        />
-      ) : null}
-
       <Dialog
         onOpenChange={(open) => {
           if (!open) {
@@ -1187,12 +1155,21 @@ export function MainProjectsPage() {
               value={taskDetailsText}
             />
             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-              <Input
+              <Select
                 disabled={!taskDetailsTarget || !canEditTask(taskDetailsTarget.task)}
                 onChange={(event) => setTaskDetailsModel(event.target.value)}
-                placeholder="Model"
                 value={taskDetailsModel}
-              />
+              >
+                {!TASK_MODEL_OPTIONS.some((option) => option.value === taskDetailsModel) &&
+                taskDetailsModel.trim().length > 0 ? (
+                  <option value={taskDetailsModel}>{taskDetailsModel}</option>
+                ) : null}
+                {TASK_MODEL_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
               <Input
                 disabled={!taskDetailsTarget || !canEditTask(taskDetailsTarget.task)}
                 onChange={(event) => setTaskDetailsReasoning(event.target.value)}

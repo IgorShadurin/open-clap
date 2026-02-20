@@ -7,12 +7,9 @@ interface ApiErrorPayload {
 
 export function buildTaskScopeHref(
   projectId: string,
-  subprojectId?: string | null,
+  _subprojectId?: string | null,
 ): string {
-  if (subprojectId) {
-    return `/projects/${projectId}/tasks?subprojectId=${encodeURIComponent(subprojectId)}`;
-  }
-
+  void _subprojectId;
   return `/projects/${projectId}/tasks`;
 }
 

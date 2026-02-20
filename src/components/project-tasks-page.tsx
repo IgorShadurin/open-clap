@@ -2,16 +2,15 @@
 
 import Link from "next/link";
 import {
-  ChevronRight,
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
   FileText,
-  Folder,
-  FolderPlus,
   GripVertical,
   Hand,
   Pause,
   Pencil,
   Play,
-  Plus,
   Settings,
   Square,
   Trash2,
@@ -19,10 +18,20 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
+import {
+  DEFAULT_TASK_MODEL,
+  DEFAULT_TASK_REASONING,
+  TASK_MODEL_OPTIONS,
+} from "@/lib/task-reasoning";
+
 import type { ProjectEntity, SubprojectEntity, TaskEntity } from "../../shared/contracts";
-import { buildTaskScopeHref, canEditTask, requestJson } from "./app-dashboard-helpers";
-import { CreateSubprojectModal } from "./create-subproject-modal";
-import { CreateTaskModal } from "./create-task-modal";
+import { canEditTask, requestJson } from "./app-dashboard-helpers";
+import {
+  SubprojectQuickAdd,
+  type SubprojectQuickAddPayload,
+} from "./subproject-quick-add";
+import { TaskQuickAdd, type TaskQuickAddPayload } from "./task-quick-add";
+import { useRealtimeSync } from "./use-realtime-sync";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -35,6 +44,7 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
+import { Select } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 
 type SubprojectWithTasks = SubprojectEntity & { tasks: TaskEntity[] };
@@ -52,7 +62,46 @@ interface TaskResponseEntry {
 
 interface ProjectTasksPageProps {
   projectId: string;
-  subprojectId?: string | null;
+}
+
+interface DraggingTaskState {
+  scopeId: string;
+  taskId: string;
+}
+
+const TASK_RESPONSE_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+});
+
+function isFinishedTask(task: TaskEntity): boolean {
+  return task.status === "done" || task.status === "failed" || task.status === "stopped";
+}
+
+function isErrorTask(task: TaskEntity): boolean {
+  return task.status === "failed";
+}
+
+function toDisplayedTasks(tasks: TaskEntity[]): TaskEntity[] {
+  const activeTasks = tasks.filter((task) => !isFinishedTask(task));
+  const finishedTasks = tasks.filter((task) => isFinishedTask(task));
+  return [...activeTasks, ...finishedTasks];
+}
+
+function formatTaskResponseDate(value: string | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return TASK_RESPONSE_DATE_FORMATTER.format(parsed);
 }
 
 function truncateTaskPreview(text: string, limit = 100): string {
@@ -64,17 +113,21 @@ function truncateTaskPreview(text: string, limit = 100): string {
   return `${normalized.slice(0, limit).trimEnd()}...`;
 }
 
-export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPageProps) {
+function getSubprojectScopeId(subprojectId: string): string {
+  return `subproject:${subprojectId}`;
+}
+
+export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
   const [projects, setProjects] = useState<ProjectTree[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [responseViewer, setResponseViewer] = useState<{
+    finishedAt: string | null;
     response: TaskResponseEntry;
+    status: TaskEntity["status"];
     taskText: string;
   } | null>(null);
 
-  const [createTaskModalOpen, setCreateTaskModalOpen] = useState(false);
-  const [createSubprojectModalOpen, setCreateSubprojectModalOpen] = useState(false);
   const [deleteTaskTarget, setDeleteTaskTarget] = useState<TaskEntity | null>(null);
   const [editTaskTarget, setEditTaskTarget] = useState<TaskEntity | null>(null);
   const [editTaskText, setEditTaskText] = useState("");
@@ -82,17 +135,36 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
   const [editTaskReasoning, setEditTaskReasoning] = useState("");
   const [editTaskSubmitting, setEditTaskSubmitting] = useState(false);
 
-  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
+  const [draggingTask, setDraggingTask] = useState<DraggingTaskState | null>(null);
+  const [draggingSubprojectId, setDraggingSubprojectId] = useState<string | null>(null);
+  const [expandedSubprojectIds, setExpandedSubprojectIds] = useState<Record<string, boolean>>({});
 
-  const loadTree = useCallback(async () => {
-    setLoading(true);
+  const stopDragPropagation = (event: { stopPropagation: () => void }) => {
+    event.stopPropagation();
+  };
+
+  const preventControlDragStart = (event: {
+    preventDefault: () => void;
+    stopPropagation: () => void;
+  }) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const loadTree = useCallback(async (options?: { silent?: boolean }) => {
+    if (!options?.silent) {
+      setLoading(true);
+    }
+
     try {
       const tree = await requestJson<ProjectTree[]>("/api/projects/tree");
       setProjects(tree);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to load tasks");
     } finally {
-      setLoading(false);
+      if (!options?.silent) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -100,36 +172,44 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
     void loadTree();
   }, [loadTree]);
 
+  useRealtimeSync(() => {
+    void loadTree({ silent: true });
+  });
+
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === projectId) ?? null,
     [projectId, projects],
   );
 
-  const selectedSubproject = useMemo(() => {
-    if (!selectedProject || !subprojectId) {
-      return null;
-    }
-    return (
-      selectedProject.subprojects.find((subproject) => subproject.id === subprojectId) ?? null
-    );
-  }, [selectedProject, subprojectId]);
-
-  const selectedTasks = useMemo(() => {
-    if (!selectedProject) {
-      return [] as TaskEntity[];
-    }
-
-    if (subprojectId) {
-      return selectedSubproject?.tasks ?? [];
-    }
-
-    return selectedProject.tasks;
-  }, [selectedProject, selectedSubproject, subprojectId]);
-
-  const visibleSelectedTasks = useMemo(
-    () => selectedTasks.filter((task) => task.status !== "done"),
-    [selectedTasks],
+  const displayedProjectTasks = useMemo(
+    () => toDisplayedTasks(selectedProject?.tasks ?? []),
+    [selectedProject],
   );
+
+  const activeProjectTasks = useMemo(
+    () => displayedProjectTasks.filter((task) => !isFinishedTask(task)),
+    [displayedProjectTasks],
+  );
+
+  useEffect(() => {
+    if (!selectedProject) {
+      return;
+    }
+
+    const knownSubprojectIds = new Set(selectedProject.subprojects.map((item) => item.id));
+    setExpandedSubprojectIds((current) => {
+      let changed = false;
+      const next: Record<string, boolean> = {};
+      for (const [subprojectId, expanded] of Object.entries(current)) {
+        if (!knownSubprojectIds.has(subprojectId)) {
+          changed = true;
+          continue;
+        }
+        next[subprojectId] = expanded;
+      }
+      return changed ? next : current;
+    });
+  }, [selectedProject]);
 
   const handleTaskAction = async (
     taskId: string,
@@ -204,7 +284,9 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
         throw new Error("No responses recorded for this task yet.");
       }
       setResponseViewer({
+        finishedAt: isFinishedTask(task) ? task.updatedAt : null,
         response: latest,
+        status: task.status,
         taskText: task.text,
       });
     } catch (error) {
@@ -212,13 +294,90 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
     }
   };
 
-  const handleTaskDrop = async (targetTaskId: string) => {
-    if (!draggingTaskId || draggingTaskId === targetTaskId) {
+  const handleProjectPauseToggle = async () => {
+    if (!selectedProject) {
       return;
     }
 
-    const currentOrder = visibleSelectedTasks.map((task) => task.id);
-    const fromIndex = currentOrder.findIndex((id) => id === draggingTaskId);
+    try {
+      const nextPaused = !selectedProject.paused;
+      await requestJson(`/api/projects/${selectedProject.id}`, {
+        body: JSON.stringify({
+          paused: nextPaused,
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      });
+      await loadTree();
+      toast.success(nextPaused ? "Project paused" : "Project resumed");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to update project state");
+    }
+  };
+
+  const handleSubprojectPauseToggle = async (subproject: SubprojectWithTasks) => {
+    try {
+      const nextPaused = !subproject.paused;
+      await requestJson(`/api/subprojects/${subproject.id}`, {
+        body: JSON.stringify({
+          paused: nextPaused,
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      });
+      await loadTree();
+      toast.success(nextPaused ? "Subproject paused" : "Subproject resumed");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to update subproject state");
+    }
+  };
+
+  const handleSubprojectDrop = async (targetSubprojectId: string) => {
+    if (!selectedProject) {
+      return;
+    }
+
+    if (!draggingSubprojectId || draggingSubprojectId === targetSubprojectId) {
+      return;
+    }
+
+    const currentOrder = selectedProject.subprojects.map((subproject) => subproject.id);
+    const fromIndex = currentOrder.findIndex((id) => id === draggingSubprojectId);
+    const toIndex = currentOrder.findIndex((id) => id === targetSubprojectId);
+    if (fromIndex < 0 || toIndex < 0) {
+      return;
+    }
+
+    const reordered = currentOrder.slice();
+    const [removed] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, removed);
+
+    try {
+      await requestJson("/api/subprojects/reorder", {
+        body: JSON.stringify({ orderedIds: reordered, projectId: selectedProject.id }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+      await loadTree();
+      toast.success("Subproject priority updated");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to reorder subprojects");
+    } finally {
+      setDraggingSubprojectId(null);
+    }
+  };
+
+  const handleTaskDrop = async (
+    targetTaskId: string,
+    scopeId: string,
+    activeTasksInScope: TaskEntity[],
+  ) => {
+    if (!draggingTask || draggingTask.scopeId !== scopeId || draggingTask.taskId === targetTaskId) {
+      return;
+    }
+
+    const currentOrder = activeTasksInScope.map((task) => task.id);
+    const fromIndex = currentOrder.findIndex((id) => id === draggingTask.taskId);
     const toIndex = currentOrder.findIndex((id) => id === targetTaskId);
     if (fromIndex < 0 || toIndex < 0) {
       return;
@@ -238,7 +397,209 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
       toast.success("Task priority updated");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to reorder tasks");
+    } finally {
+      setDraggingTask(null);
     }
+  };
+
+  const handleQuickTaskCreate = async (
+    payload: TaskQuickAddPayload,
+    subprojectId: string | null,
+  ) => {
+    if (!selectedProject) {
+      return;
+    }
+
+    try {
+      await requestJson("/api/tasks", {
+        body: JSON.stringify({
+          includePreviousContext: payload.includeContext,
+          model: payload.model.trim() || DEFAULT_TASK_MODEL,
+          previousContextMessages: payload.includeContext ? payload.contextCount : 0,
+          projectId: selectedProject.id,
+          reasoning: payload.reasoning.trim() || DEFAULT_TASK_REASONING,
+          subprojectId,
+          text: payload.text.trim(),
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+      await loadTree();
+      toast.success("Task created");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to create task");
+    }
+  };
+
+  const handleQuickSubprojectCreate = async (payload: SubprojectQuickAddPayload) => {
+    if (!selectedProject) {
+      return;
+    }
+
+    try {
+      await requestJson("/api/subprojects", {
+        body: JSON.stringify({
+          metadata: payload.metadata || undefined,
+          name: payload.name,
+          path: payload.path || selectedProject.path,
+          projectId: selectedProject.id,
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+      await loadTree();
+      toast.success("Subproject created");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to create subproject");
+    }
+  };
+
+  const toggleSubprojectExpanded = (subprojectId: string) => {
+    setExpandedSubprojectIds((current) => ({
+      ...current,
+      [subprojectId]: !current[subprojectId],
+    }));
+  };
+
+  const renderTaskRow = (
+    task: TaskEntity,
+    scopeId: string,
+    activeTasksInScope: TaskEntity[],
+  ) => {
+    const finished = isFinishedTask(task);
+    const failed = isErrorTask(task);
+
+    return (
+      <div
+        className="flex flex-wrap items-center gap-2 rounded border border-black/10 bg-white p-2"
+        draggable={!finished}
+        key={task.id}
+        onDragEnd={() => setDraggingTask(null)}
+        onDragOver={(event) => {
+          if (!finished) {
+            event.preventDefault();
+          }
+        }}
+        onDragStart={(event) => {
+          if (!finished) {
+            event.stopPropagation();
+            setDraggingTask({ scopeId, taskId: task.id });
+          }
+        }}
+        onDrop={(event) => {
+          if (!finished) {
+            event.preventDefault();
+            event.stopPropagation();
+            void handleTaskDrop(task.id, scopeId, activeTasksInScope);
+          }
+        }}
+      >
+        <GripVertical className="h-4 w-4 text-zinc-400" />
+        <div className="min-w-[180px] flex-1 text-sm">
+          <button
+            className="flex w-full items-center gap-2 text-left"
+            onClick={() => {
+              if (finished) {
+                void handleTaskResponseView(task);
+                return;
+              }
+              void handleTaskEdit(task);
+            }}
+            title={finished ? "Open task response" : "Edit task"}
+            type="button"
+          >
+            {failed ? (
+              <AlertCircle
+                aria-label="Task failed"
+                className="h-4 w-4 text-red-600"
+                title="Task failed"
+              />
+            ) : null}
+            <span
+              className={`${
+                finished ? "line-through text-zinc-500" : ""
+              } cursor-pointer underline-offset-2 hover:underline`}
+            >
+              {task.text}
+            </span>
+          </button>
+        </div>
+        {!canEditTask(task) ? <Badge>locked</Badge> : null}
+
+        {!finished ? (
+          <Button
+            aria-label="Edit task"
+            className="h-8 w-8 rounded-full border-blue-200 p-0 text-blue-700 hover:bg-blue-50"
+            disabled={!canEditTask(task)}
+            onClick={() => void handleTaskEdit(task)}
+            onDragStart={preventControlDragStart}
+            onMouseDown={stopDragPropagation}
+            onPointerDown={stopDragPropagation}
+            size="sm"
+            title="Edit task"
+            type="button"
+            variant="outline"
+          >
+            <Pencil className="h-4 w-4" />
+            <span className="sr-only">Edit</span>
+          </Button>
+        ) : null}
+
+        {task.status === "in_progress" ? (
+          <Button
+            aria-label="Stop task"
+            className="h-8 w-8 rounded-full border-orange-200 p-0 text-orange-700 hover:bg-orange-50"
+            onClick={() => void handleTaskAction(task.id, "stop")}
+            onDragStart={preventControlDragStart}
+            onMouseDown={stopDragPropagation}
+            onPointerDown={stopDragPropagation}
+            size="sm"
+            title="Stop task"
+            type="button"
+            variant="outline"
+          >
+            <Square className="h-4 w-4" />
+            <span className="sr-only">Stop</span>
+          </Button>
+        ) : finished ? null : (
+          <Button
+            aria-label={task.paused ? "Resume task" : "Pause task"}
+            className={`h-8 w-8 rounded-full p-0 ${
+              task.paused
+                ? "border-amber-300 text-amber-700 hover:bg-amber-50"
+                : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+            }`}
+            onClick={() => void handleTaskAction(task.id, task.paused ? "resume" : "pause")}
+            onDragStart={preventControlDragStart}
+            onMouseDown={stopDragPropagation}
+            onPointerDown={stopDragPropagation}
+            size="sm"
+            title={task.paused ? "Resume task" : "Pause task"}
+            type="button"
+            variant="outline"
+          >
+            {task.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+            <span className="sr-only">{task.paused ? "Resume" : "Pause"}</span>
+          </Button>
+        )}
+
+        <Button
+          aria-label="Remove task"
+          className="h-8 w-8 rounded-full border-red-200 p-0 text-red-700 hover:bg-red-50"
+          onClick={() => setDeleteTaskTarget(task)}
+          onDragStart={preventControlDragStart}
+          onMouseDown={stopDragPropagation}
+          onPointerDown={stopDragPropagation}
+          size="sm"
+          title="Remove task"
+          type="button"
+          variant="outline"
+        >
+          <Trash2 className="h-4 w-4" />
+          <span className="sr-only">Remove</span>
+        </Button>
+      </div>
+    );
   };
 
   if (loading) {
@@ -255,22 +616,7 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
     );
   }
 
-  if (subprojectId && !selectedSubproject) {
-    return (
-      <div className="p-8">
-        <div className="rounded-md border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          Subproject not found in this project.
-        </div>
-      </div>
-    );
-  }
-
-  const scopeTitle = selectedSubproject
-    ? `Subproject: ${selectedSubproject.name} (Project: ${selectedProject.name})`
-    : `Project: ${selectedProject.name}`;
-  const projectScopeHref = buildTaskScopeHref(selectedProject.id);
-  const tasksSectionTitle = "Tasks";
-  const pageHeading = selectedSubproject ? selectedSubproject.name : selectedProject.name;
+  const pageHeading = selectedProject.name;
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-zinc-100 p-4 md:p-8">
@@ -295,167 +641,160 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
 
         <div className="space-y-3 rounded-xl border border-black/10 bg-white/70 px-4 py-3">
           <div className="space-y-1">
-            <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-              {selectedSubproject ? "Subproject" : "Project"}
+            <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">Project</div>
+            <div className="flex items-center gap-2">
+              <Button
+                aria-label={selectedProject.paused ? "Resume project" : "Pause project"}
+                className={`h-9 w-9 rounded-full p-0 ${
+                  selectedProject.paused
+                    ? "border-amber-300 text-amber-700 hover:bg-amber-50"
+                    : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                }`}
+                onClick={() => void handleProjectPauseToggle()}
+                size="sm"
+                title={selectedProject.paused ? "Resume project" : "Pause project"}
+                type="button"
+                variant="outline"
+              >
+                {selectedProject.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                <span className="sr-only">
+                  {selectedProject.paused ? "Resume project" : "Pause project"}
+                </span>
+              </Button>
+              <h1 className="text-3xl font-semibold tracking-tight">{pageHeading}</h1>
             </div>
-            <h1 className="text-3xl font-semibold tracking-tight">{pageHeading}</h1>
           </div>
-          {selectedSubproject ? (
-            <div className="flex flex-wrap items-center gap-2 text-sm text-zinc-600">
-              <span>Subproject of</span>
-              <Link className="font-medium text-zinc-800 underline-offset-4 hover:underline" href={projectScopeHref}>
-                {selectedProject.name}
-              </Link>
-              <ChevronRight className="h-4 w-4 text-zinc-500" />
-              <span className="text-zinc-700">Tasks</span>
-            </div>
-          ) : null}
         </div>
 
-        {selectedSubproject ? (
-          <Card>
-            <CardContent className="space-y-3 py-4">
-              <div className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                Current Subproject Scope
-              </div>
-              <div className="flex flex-wrap items-center gap-2 text-sm">
-                <Folder className="h-4 w-4 text-zinc-500" />
-                <span className="text-zinc-500">Parent project:</span>
-                <Link className="font-medium underline-offset-4 hover:underline" href={projectScopeHref}>
-                  {selectedProject.name}
-                </Link>
-                <span className="text-zinc-400">/</span>
-                <span className="font-semibold">Subproject: {selectedSubproject.name}</span>
-              </div>
-              <div className="space-y-1 text-xs text-zinc-600">
-                <div>
-                  <span className="font-medium">Project path:</span> {selectedProject.path}
-                </div>
-                <div>
-                  <span className="font-medium">Subproject path:</span> {selectedSubproject.path}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
-
         <Card>
-          <CardContent className="py-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <Button onClick={() => setCreateTaskModalOpen(true)} type="button">
-                <Plus className="h-4 w-4" />
-                Add Task
-              </Button>
-              <Button onClick={() => setCreateSubprojectModalOpen(true)} type="button" variant="outline">
-                <FolderPlus className="h-4 w-4" />
-                Add Subproject
-              </Button>
-            </div>
+          <CardHeader>
+            <CardTitle>Subprojects ({selectedProject.subprojects.length})</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <SubprojectQuickAdd
+              defaultPath={selectedProject.path}
+              onSubmit={handleQuickSubprojectCreate}
+              submitAriaLabel={`Add subproject to ${selectedProject.name}`}
+              submitTitle={`Add subproject to ${selectedProject.name}`}
+            />
+            {selectedProject.subprojects.length < 1 ? (
+              <div className="rounded-md border border-dashed border-black/15 px-3 py-2 text-sm text-zinc-500">
+                No subprojects yet.
+              </div>
+            ) : null}
+
+            {selectedProject.subprojects.map((subproject) => {
+              const subprojectScopeId = getSubprojectScopeId(subproject.id);
+              const displayedSubprojectTasks = toDisplayedTasks(subproject.tasks);
+              const activeSubprojectTasks = displayedSubprojectTasks.filter(
+                (task) => !isFinishedTask(task),
+              );
+              const expanded = expandedSubprojectIds[subproject.id] ?? false;
+
+              return (
+                <div
+                  className="rounded border border-black/10 bg-white transition-colors"
+                  draggable
+                  id={`subproject-${subproject.id}`}
+                  key={subproject.id}
+                  onDragEnd={() => setDraggingSubprojectId(null)}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDragStart={() => setDraggingSubprojectId(subproject.id)}
+                  onDrop={() => void handleSubprojectDrop(subproject.id)}
+                >
+                  <div className="flex items-center gap-2 px-3 py-2">
+                    <GripVertical className="h-4 w-4 text-zinc-400" />
+                    <Button
+                      aria-label={subproject.paused ? "Resume subproject" : "Pause subproject"}
+                      className={`h-8 w-8 rounded-full p-0 ${
+                        subproject.paused
+                          ? "border-amber-300 text-amber-700 hover:bg-amber-50"
+                          : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                      }`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void handleSubprojectPauseToggle(subproject);
+                      }}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      size="sm"
+                      title={subproject.paused ? "Resume subproject" : "Pause subproject"}
+                      type="button"
+                      variant="outline"
+                    >
+                      {subproject.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                      <span className="sr-only">
+                        {subproject.paused ? "Resume subproject" : "Pause subproject"}
+                      </span>
+                    </Button>
+
+                    <button
+                      className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left"
+                      onClick={() => toggleSubprojectExpanded(subproject.id)}
+                      type="button"
+                    >
+                      <div className="min-w-0 space-y-0.5">
+                        <div className="truncate text-sm font-medium">{subproject.name}</div>
+                        <div className="truncate text-xs text-zinc-500">{subproject.path}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge>
+                          {subproject.tasks.length} task{subproject.tasks.length === 1 ? "" : "s"}
+                        </Badge>
+                        {expanded ? (
+                          <ChevronUp className="h-4 w-4 text-zinc-500" />
+                        ) : (
+                          <ChevronDown className="h-4 w-4 text-zinc-500" />
+                        )}
+                      </div>
+                    </button>
+                  </div>
+
+                  {expanded ? (
+                    <div className="space-y-2 border-t border-black/10 p-2">
+                      <TaskQuickAdd
+                        onSubmit={(payload) => handleQuickTaskCreate(payload, subproject.id)}
+                        placeholder={`Add task to ${subproject.name}`}
+                        stopPropagation
+                        submitAriaLabel={`Add task to ${subproject.name}`}
+                        submitTitle={`Add task to ${subproject.name}`}
+                      />
+
+                      {displayedSubprojectTasks.length < 1 ? (
+                        <div className="rounded-md border border-dashed border-black/15 px-3 py-2 text-sm text-zinc-500">
+                          No tasks in this subproject.
+                        </div>
+                      ) : (
+                        displayedSubprojectTasks.map((task) =>
+                          renderTaskRow(task, subprojectScopeId, activeSubprojectTasks),
+                        )
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-              <CardTitle>
-              {tasksSectionTitle} ({visibleSelectedTasks.length})
-            </CardTitle>
+            <CardTitle>Tasks ({displayedProjectTasks.length})</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {visibleSelectedTasks.length < 1 ? (
+            <TaskQuickAdd
+              onSubmit={(payload) => handleQuickTaskCreate(payload, null)}
+              placeholder="Add task"
+              submitAriaLabel={`Add task to ${selectedProject.name}`}
+              submitTitle={`Add task to ${selectedProject.name}`}
+            />
+            {displayedProjectTasks.length < 1 ? (
               <div className="rounded-md border border-dashed border-black/15 px-3 py-2 text-sm text-zinc-500">
-                No active tasks in this scope.
+                No tasks in this project.
               </div>
-            ) : null}
-
-            {visibleSelectedTasks.map((task) => (
-              <div
-                className="flex flex-wrap items-center gap-2 rounded border border-black/10 bg-white p-2"
-                draggable
-                key={task.id}
-                onDragOver={(event) => event.preventDefault()}
-                onDragStart={() => setDraggingTaskId(task.id)}
-                onDrop={() => void handleTaskDrop(task.id)}
-              >
-                <GripVertical className="h-4 w-4 text-zinc-400" />
-                <div className="min-w-[180px] flex-1 text-sm">{task.text}</div>
-                <Badge>{task.model}</Badge>
-                {!canEditTask(task) ? <Badge>locked</Badge> : null}
-
-                <Button
-                  aria-label="Edit task"
-                  className="h-8 w-8 rounded-full border-blue-200 p-0 text-blue-700 hover:bg-blue-50"
-                  disabled={!canEditTask(task)}
-                  onClick={() => void handleTaskEdit(task)}
-                  size="sm"
-                  title="Edit task"
-                  type="button"
-                  variant="outline"
-                >
-                  <Pencil className="h-4 w-4" />
-                  <span className="sr-only">Edit</span>
-                </Button>
-
-                <Button
-                  aria-label="View task response"
-                  className="h-8 w-8 rounded-full border-indigo-200 p-0 text-indigo-700 hover:bg-indigo-50"
-                  onClick={() => void handleTaskResponseView(task)}
-                  size="sm"
-                  title="Open response"
-                  type="button"
-                  variant="outline"
-                >
-                  <FileText className="h-4 w-4" />
-                  <span className="sr-only">Response</span>
-                </Button>
-
-                {task.status === "in_progress" ? (
-                  <Button
-                    aria-label="Stop task"
-                    className="h-8 w-8 rounded-full border-orange-200 p-0 text-orange-700 hover:bg-orange-50"
-                    onClick={() => void handleTaskAction(task.id, "stop")}
-                    size="sm"
-                    title="Stop task"
-                    type="button"
-                    variant="outline"
-                  >
-                    <Square className="h-4 w-4" />
-                    <span className="sr-only">Stop</span>
-                  </Button>
-                ) : (
-                  <Button
-                    aria-label={task.paused ? "Resume task" : "Pause task"}
-                    className={`h-8 w-8 rounded-full p-0 ${
-                      task.paused
-                        ? "border-amber-300 text-amber-700 hover:bg-amber-50"
-                        : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-                    }`}
-                    onClick={() =>
-                      void handleTaskAction(task.id, task.paused ? "resume" : "pause")
-                    }
-                    size="sm"
-                    title={task.paused ? "Resume task" : "Pause task"}
-                    type="button"
-                    variant="outline"
-                  >
-                    {task.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
-                    <span className="sr-only">{task.paused ? "Resume" : "Pause"}</span>
-                  </Button>
-                )}
-
-                <Button
-                  aria-label="Remove task"
-                  className="h-8 w-8 rounded-full border-red-200 p-0 text-red-700 hover:bg-red-50"
-                  onClick={() => setDeleteTaskTarget(task)}
-                  size="sm"
-                  title="Remove task"
-                  type="button"
-                  variant="outline"
-                >
-                  <Trash2 className="h-4 w-4" />
-                  <span className="sr-only">Remove</span>
-                </Button>
-              </div>
-            ))}
+            ) : (
+              displayedProjectTasks.map((task) => renderTaskRow(task, "project", activeProjectTasks))
+            )}
           </CardContent>
         </Card>
       </div>
@@ -464,9 +803,7 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Request Error</DialogTitle>
-            <DialogDescription>
-              {errorMessage ?? "An unexpected error occurred."}
-            </DialogDescription>
+            <DialogDescription>{errorMessage ?? "An unexpected error occurred."}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button onClick={() => setErrorMessage(null)} type="button" variant="outline">
@@ -528,11 +865,17 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
               value={editTaskText}
             />
             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-              <Input
-                onChange={(event) => setEditTaskModel(event.target.value)}
-                placeholder="Model"
-                value={editTaskModel}
-              />
+              <Select onChange={(event) => setEditTaskModel(event.target.value)} value={editTaskModel}>
+                {!TASK_MODEL_OPTIONS.some((option) => option.value === editTaskModel) &&
+                editTaskModel.trim().length > 0 ? (
+                  <option value={editTaskModel}>{editTaskModel}</option>
+                ) : null}
+                {TASK_MODEL_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
               <Input
                 onChange={(event) => setEditTaskReasoning(event.target.value)}
                 placeholder="Reasoning"
@@ -555,22 +898,35 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        onOpenChange={(open) => !open && setResponseViewer(null)}
-        open={Boolean(responseViewer)}
-      >
-        <DialogContent>
+      <Dialog onOpenChange={(open) => !open && setResponseViewer(null)} open={Boolean(responseViewer)}>
+        <DialogContent className="sm:max-w-[64rem]">
           <DialogHeader>
-            <DialogTitle>Task Response</DialogTitle>
+            <DialogTitle className="inline-flex items-center gap-2">
+              <FileText className="h-4 w-4" />
+              Task Response
+            </DialogTitle>
             <DialogDescription>{responseViewer?.taskText ?? ""}</DialogDescription>
           </DialogHeader>
-          <Textarea
-            className="min-h-[280px] text-xs"
-            readOnly
-            value={responseViewer?.response.fullText ?? ""}
-          />
-          <div className="text-xs text-zinc-500">
-            created at: {responseViewer?.response.createdAt ?? "-"}
+          <Textarea className="min-h-[280px] text-xs" readOnly value={responseViewer?.response.fullText ?? ""} />
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div className="rounded-md border border-black/10 bg-zinc-50 px-3 py-2">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                Response Created
+              </div>
+              <div className="text-xs text-zinc-700">{formatTaskResponseDate(responseViewer?.response.createdAt)}</div>
+            </div>
+            <div className="rounded-md border border-black/10 bg-zinc-50 px-3 py-2">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                Task Finished
+              </div>
+              <div className="text-xs text-zinc-700">
+                {responseViewer?.finishedAt
+                  ? formatTaskResponseDate(responseViewer.finishedAt)
+                  : responseViewer?.status === "in_progress"
+                    ? "In progress"
+                    : "Not finished"}
+              </div>
+            </div>
           </div>
           <DialogFooter>
             <Button onClick={() => setResponseViewer(null)} type="button" variant="outline">
@@ -580,31 +936,6 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
         </DialogContent>
       </Dialog>
 
-      <CreateTaskModal
-        onCreated={async () => {
-          await loadTree();
-          toast.success("Task created");
-        }}
-        onError={(message) => setErrorMessage(message)}
-        onOpenChange={setCreateTaskModalOpen}
-        open={createTaskModalOpen}
-        projectId={projectId}
-        scopeTitle={scopeTitle}
-        subprojectId={subprojectId ?? null}
-      />
-
-      <CreateSubprojectModal
-        defaultPath={selectedProject.path}
-        onCreated={async () => {
-          await loadTree();
-          toast.success("Subproject created");
-        }}
-        onError={(message) => setErrorMessage(message)}
-        onOpenChange={setCreateSubprojectModalOpen}
-        open={createSubprojectModalOpen}
-        projectId={selectedProject.id}
-        projectName={selectedProject.name}
-      />
     </div>
   );
 }

@@ -27,6 +27,19 @@ export interface FetchImmediateActionsResponse {
   actions: ImmediateAction[];
 }
 
+export interface DaemonRuntimeSettings {
+  codex_command_template: string;
+  daemon_max_parallel_tasks: string;
+  task_message_template: string;
+  task_message_template_with_history: string;
+}
+
+export interface FetchDaemonSettingsResponse {
+  changed: boolean;
+  revision: string;
+  settings?: DaemonRuntimeSettings;
+}
+
 export interface AcknowledgeImmediateActionRequest {
   actionId: string;
 }

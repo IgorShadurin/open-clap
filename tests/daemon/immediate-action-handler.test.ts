@@ -7,6 +7,7 @@ import test from "node:test";
 
 import type { DaemonApiClient } from "../../scripts/daemon/api-client";
 import { handleImmediateActions } from "../../scripts/daemon/immediate-action-handler";
+import type { FetchDaemonSettingsResponse } from "../../shared/contracts";
 import type { DaemonTask, DaemonTaskStatus, ImmediateAction } from "../../shared/contracts/task";
 
 class FakeApiClient implements DaemonApiClient {
@@ -23,6 +24,13 @@ class FakeApiClient implements DaemonApiClient {
 
   public async fetchImmediateActions(): Promise<ImmediateAction[]> {
     return [];
+  }
+
+  public async fetchRuntimeSettings(): Promise<FetchDaemonSettingsResponse> {
+    return {
+      changed: false,
+      revision: "fake",
+    };
   }
 
   public async completeImmediateAction(actionId: string): Promise<void> {

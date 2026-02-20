@@ -3,6 +3,12 @@
 import { CircleHelp, Loader2, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import {
+  DEFAULT_TASK_MODEL,
+  TASK_MODEL_OPTIONS,
+  DEFAULT_TASK_REASONING,
+  TASK_REASONING_OPTIONS,
+} from "@/lib/task-reasoning";
 import { cn } from "@/lib/utils";
 
 import { requestJson } from "./app-dashboard-helpers";
@@ -18,10 +24,9 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
+import { Select } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 
-const DEFAULT_MODEL = "gpt-5.3-codex";
-const DEFAULT_REASONING = "high";
 const INCLUDE_CONTEXT_HELP =
   "If enabled, the daemon includes previous task responses from this same scope. Use the number field to control how many previous messages are added.";
 
@@ -45,8 +50,8 @@ export function CreateTaskModal({
   subprojectId,
 }: CreateTaskModalProps) {
   const [taskText, setTaskText] = useState("");
-  const [taskModel, setTaskModel] = useState(DEFAULT_MODEL);
-  const [taskReasoning, setTaskReasoning] = useState(DEFAULT_REASONING);
+  const [taskModel, setTaskModel] = useState(DEFAULT_TASK_MODEL);
+  const [taskReasoning, setTaskReasoning] = useState(DEFAULT_TASK_REASONING);
   const [includeContext, setIncludeContext] = useState(false);
   const [contextCount, setContextCount] = useState(0);
   const [showIncludeContextHelp, setShowIncludeContextHelp] = useState(false);
@@ -57,8 +62,8 @@ export function CreateTaskModal({
       return;
     }
     setTaskText("");
-    setTaskModel(DEFAULT_MODEL);
-    setTaskReasoning(DEFAULT_REASONING);
+    setTaskModel(DEFAULT_TASK_MODEL);
+    setTaskReasoning(DEFAULT_TASK_REASONING);
     setIncludeContext(false);
     setContextCount(0);
     setShowIncludeContextHelp(false);
@@ -104,16 +109,27 @@ export function CreateTaskModal({
             value={taskText}
           />
           <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-            <Input
-              onChange={(event) => setTaskModel(event.target.value)}
-              placeholder="Model"
-              value={taskModel}
-            />
-            <Input
+            <Select onChange={(event) => setTaskModel(event.target.value)} value={taskModel}>
+              {!TASK_MODEL_OPTIONS.some((option) => option.value === taskModel) &&
+              taskModel.trim().length > 0 ? (
+                <option value={taskModel}>{taskModel}</option>
+              ) : null}
+              {TASK_MODEL_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
+            <Select
               onChange={(event) => setTaskReasoning(event.target.value)}
-              placeholder="Reasoning"
               value={taskReasoning}
-            />
+            >
+              {TASK_REASONING_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Select>
           </div>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
             <div className="flex items-center gap-2 rounded border border-black/10 px-2">

@@ -70,7 +70,7 @@ test("executeTask returns done result with full response", async () => {
   assert.equal(result.finishedAt instanceof Date, true);
 });
 
-test("executeTask throws when codex command fails", async () => {
+test("executeTask returns failed result when codex command exits non-zero", async () => {
   const task: DaemonTask = {
     id: "t4",
     text: "Execute fail",
@@ -80,16 +80,42 @@ test("executeTask throws when codex command fails", async () => {
     includeHistory: false,
   };
 
-  await assert.rejects(
-    executeTask(task, templates, {
-      codexCommandTemplate: 'codex exec -C "{{contextPath}}" --model "{{model}}" "{{message}}"',
-      commandRunner: async () => ({
-        code: 2,
-        signal: null,
-        stderr: "command failed",
-        stdout: "",
-      }),
+  const result = await executeTask(task, templates, {
+    codexCommandTemplate: 'codex exec -C "{{contextPath}}" --model "{{model}}" "{{message}}"',
+    commandRunner: async () => ({
+      code: 2,
+      signal: null,
+      stderr: "command failed",
+      stdout: "",
     }),
-    /Codex command failed/,
-  );
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.fullResponse.includes("Codex command failed"), true);
+  assert.equal(result.fullResponse.includes("command failed"), true);
+  assert.equal(result.finishedAt instanceof Date, true);
+});
+
+test("executeTask returns failed result when codex output indicates read-only sandbox", async () => {
+  const task: DaemonTask = {
+    id: "t5",
+    text: "Create file",
+    contextPath: "/tmp/project",
+    model: "gpt-5.3-codex",
+    reasoning: "high",
+    includeHistory: false,
+  };
+
+  const result = await executeTask(task, templates, {
+    commandRunner: async () => ({
+      code: 0,
+      signal: null,
+      stderr: "",
+      stdout: "I cannot complete this because write access is blocked by read-only sandbox.",
+    }),
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.fullResponse.includes("not completed"), true);
+  assert.equal(result.finishedAt instanceof Date, true);
 });

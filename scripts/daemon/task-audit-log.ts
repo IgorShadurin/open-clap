@@ -38,13 +38,21 @@ function toAbsolutePath(filePath: string): string {
 
 export function resolveDaemonLogFilePath(
   env: NodeJS.ProcessEnv = process.env,
+  at: Date = new Date(),
 ): string {
   const fromEnv = env.DAEMON_LOG_FILE?.trim();
   if (fromEnv) {
     return toAbsolutePath(fromEnv);
   }
 
-  return path.resolve(process.cwd(), "logs", "daemon", "daemon.log");
+  return path.resolve(
+    process.cwd(),
+    "logs",
+    "daemon",
+    String(at.getFullYear()),
+    pad(at.getMonth() + 1),
+    `${pad(at.getDate())}.log`,
+  );
 }
 
 function serializePayload(payload: unknown): string {

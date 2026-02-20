@@ -147,6 +147,28 @@ function truncateForLog(value: string, limit = 4000): string {
   return `${value.slice(0, limit)}... [truncated ${value.length - limit} chars]`;
 }
 
+function detectSemanticFailure(stdout: string, stderr: string): string | null {
+  const combined = `${stdout}\n${stderr}`.toLowerCase();
+  const patterns = [
+    /write access is blocked/,
+    /read-only sandbox/,
+    /operation not permitted/,
+    /permission denied/,
+    /couldn't create/,
+    /could not create/,
+    /can['’]?t create/,
+    /cannot create/,
+  ];
+
+  for (const pattern of patterns) {
+    if (pattern.test(combined)) {
+      return `Codex output indicates task was not completed (${pattern.source})`;
+    }
+  }
+
+  return null;
+}
+
 export function buildTaskMessage(
   task: DaemonTask,
   templates: WorkerTemplates,
@@ -181,22 +203,45 @@ export async function executeTask(
     taskId: task.id,
   });
 
-  const result = await commandRunner(command, { signal: context.signal });
+  let result: ShellCommandResult;
+  try {
+    result = await commandRunner(command, { signal: context.signal });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    context.auditLogger?.log("failure", "Codex command execution error", {
+      message,
+      taskId: task.id,
+    });
+    return {
+      status: "failed",
+      fullResponse: `Codex command execution error: ${message}`,
+      finishedAt: new Date(),
+    };
+  }
+
   const durationMs = Date.now() - startedAt;
   const fullResponse = toFullResponse(result.stdout, result.stderr);
+  const semanticFailure = detectSemanticFailure(result.stdout, result.stderr);
 
-  if (result.code !== 0) {
+  if (result.code !== 0 || semanticFailure) {
+    const reason =
+      semanticFailure ??
+      `Codex command failed for task ${task.id} (code=${result.code}, signal=${result.signal ?? "none"})`;
+
     context.auditLogger?.log("failure", "Codex command failed", {
       code: result.code,
       durationMs,
+      reason,
       signal: result.signal,
-      stderr: result.stderr,
-      stdout: result.stdout,
+      stderr: truncateForLog(result.stderr),
+      stdout: truncateForLog(result.stdout),
       taskId: task.id,
     });
-    throw new Error(
-      `Codex command failed for task ${task.id} (code=${result.code}, signal=${result.signal ?? "none"})`,
-    );
+    return {
+      status: "failed",
+      fullResponse: `${reason}\n\n${fullResponse}`,
+      finishedAt: new Date(),
+    };
   }
 
   context.auditLogger?.log("output", "Codex command output", {

@@ -22,6 +22,12 @@ import type {
   SubprojectEntity,
   TaskEntity,
 } from "../../shared/contracts";
+import {
+  DEFAULT_TASK_MODEL,
+  DEFAULT_TASK_REASONING,
+  TASK_MODEL_OPTIONS,
+  TASK_REASONING_OPTIONS,
+} from "@/lib/task-reasoning";
 import { canEditTask, extractApiErrorMessage } from "./app-dashboard-helpers";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -64,8 +70,32 @@ interface TaskResponseEntry {
   taskId: string;
 }
 
-const DEFAULT_MODEL = "gpt-5.3-codex";
-const DEFAULT_REASONING = "high";
+const DEFAULT_MODEL = DEFAULT_TASK_MODEL;
+const DEFAULT_REASONING = DEFAULT_TASK_REASONING;
+const TASK_RESPONSE_DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+});
+
+function isFinishedTask(task: TaskEntity): boolean {
+  return task.status === "done" || task.status === "failed" || task.status === "stopped";
+}
+
+function formatTaskResponseDate(value: string | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return TASK_RESPONSE_DATE_FORMATTER.format(parsed);
+}
 
 async function requestJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
@@ -113,7 +143,9 @@ export function AppDashboard() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [responseViewer, setResponseViewer] = useState<{
+    finishedAt: string | null;
     response: TaskResponseEntry;
+    status: TaskEntity["status"];
     taskText: string;
   } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -547,7 +579,9 @@ export function AppDashboard() {
         throw new Error("No responses recorded for this task yet.");
       }
       setResponseViewer({
+        finishedAt: isFinishedTask(task) ? task.updatedAt : null,
         response: latest,
+        status: task.status,
         taskText: task.text,
       });
     } catch (error) {
@@ -1049,11 +1083,17 @@ export function AppDashboard() {
               value={editTaskText}
             />
             <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-              <Input
-                onChange={(event) => setEditTaskModel(event.target.value)}
-                placeholder="Model"
-                value={editTaskModel}
-              />
+              <Select onChange={(event) => setEditTaskModel(event.target.value)} value={editTaskModel}>
+                {!TASK_MODEL_OPTIONS.some((option) => option.value === editTaskModel) &&
+                editTaskModel.trim().length > 0 ? (
+                  <option value={editTaskModel}>{editTaskModel}</option>
+                ) : null}
+                {TASK_MODEL_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
               <Input
                 onChange={(event) => setEditTaskReasoning(event.target.value)}
                 placeholder="Reasoning"
@@ -1096,9 +1136,12 @@ export function AppDashboard() {
         onOpenChange={(open) => !open && setResponseViewer(null)}
         open={Boolean(responseViewer)}
       >
-        <DialogContent>
+        <DialogContent className="sm:max-w-[64rem]">
           <DialogHeader>
-            <DialogTitle>Task Response</DialogTitle>
+            <DialogTitle className="inline-flex items-center gap-2">
+              <FileText className="h-4 w-4" />
+              Task Response
+            </DialogTitle>
             <DialogDescription>{responseViewer?.taskText ?? ""}</DialogDescription>
           </DialogHeader>
           <Textarea
@@ -1106,8 +1149,27 @@ export function AppDashboard() {
             readOnly
             value={responseViewer?.response.fullText ?? ""}
           />
-          <div className="text-xs text-zinc-500">
-            created at: {responseViewer?.response.createdAt ?? "-"}
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div className="rounded-md border border-black/10 bg-zinc-50 px-3 py-2">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                Response Created
+              </div>
+              <div className="text-xs text-zinc-700">
+                {formatTaskResponseDate(responseViewer?.response.createdAt)}
+              </div>
+            </div>
+            <div className="rounded-md border border-black/10 bg-zinc-50 px-3 py-2">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                Task Finished
+              </div>
+              <div className="text-xs text-zinc-700">
+                {responseViewer?.finishedAt
+                  ? formatTaskResponseDate(responseViewer.finishedAt)
+                  : responseViewer?.status === "in_progress"
+                    ? "In progress"
+                    : "Not finished"}
+              </div>
+            </div>
           </div>
           <DialogFooter>
             <Button onClick={() => setResponseViewer(null)} variant="outline">
@@ -1143,11 +1205,24 @@ function TaskComposer(props: {
         value={props.text}
       />
       <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
-        <Input onChange={(event) => props.onModelChange(event.target.value)} value={props.model} />
-        <Input
-          onChange={(event) => props.onReasoningChange(event.target.value)}
-          value={props.reasoning}
-        />
+        <Select onChange={(event) => props.onModelChange(event.target.value)} value={props.model}>
+          {!TASK_MODEL_OPTIONS.some((option) => option.value === props.model) &&
+          props.model.trim().length > 0 ? (
+            <option value={props.model}>{props.model}</option>
+          ) : null}
+          {TASK_MODEL_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </Select>
+        <Select onChange={(event) => props.onReasoningChange(event.target.value)} value={props.reasoning}>
+          {TASK_REASONING_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </Select>
         <div className="flex items-center gap-2 rounded border border-black/10 px-2">
           <Checkbox
             checked={props.includeContext}

@@ -5,6 +5,7 @@ import type {
   ClaimTasksResponse,
   CompleteImmediateActionRequest,
   CompleteImmediateActionResponse,
+  FetchDaemonSettingsResponse,
   FetchImmediateActionsResponse,
   UpdateTaskStatusRequest,
   DaemonTask,
@@ -15,6 +16,7 @@ import type {
 export interface DaemonApiClient {
   acknowledgeImmediateAction(actionId: string): Promise<void>;
   completeImmediateAction(actionId: string): Promise<void>;
+  fetchRuntimeSettings(revision?: string): Promise<FetchDaemonSettingsResponse>;
   fetchImmediateActions(): Promise<ImmediateAction[]>;
   fetchNextTasks(limit: number): Promise<DaemonTask[]>;
   markTasksInProgress(taskIds: string[]): Promise<void>;
@@ -34,6 +36,13 @@ export class NoopDaemonApiClient implements DaemonApiClient {
 
   public async fetchImmediateActions(): Promise<ImmediateAction[]> {
     return [];
+  }
+
+  public async fetchRuntimeSettings(revision?: string): Promise<FetchDaemonSettingsResponse> {
+    return {
+      changed: false,
+      revision: revision ?? "noop",
+    };
   }
 
   public async completeImmediateAction(actionId: string): Promise<void> {
@@ -95,6 +104,19 @@ export class HttpDaemonApiClient implements DaemonApiClient {
 
     const payload = (await response.json()) as FetchImmediateActionsResponse;
     return payload.actions;
+  }
+
+  public async fetchRuntimeSettings(revision?: string): Promise<FetchDaemonSettingsResponse> {
+    const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
+    const response = await fetch(`${this.baseUrl}/api/daemon/settings${query}`, {
+      method: "GET",
+    });
+
+    if (!response.ok) {
+      throw new Error("Failed to fetch daemon runtime settings");
+    }
+
+    return (await response.json()) as FetchDaemonSettingsResponse;
   }
 
   public async completeImmediateAction(actionId: string): Promise<void> {

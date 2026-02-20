@@ -1,4 +1,4 @@
-# OpenClap
+# 👏 OpenClap
 
 OpenClap is a local-first orchestration system for managing large volumes of AI-executable work across projects and subprojects. It is designed for high-capacity task pipelines where many actions do not require constant human attention.
 

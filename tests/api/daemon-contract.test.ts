@@ -8,12 +8,14 @@ import test from "node:test";
 import { prisma } from "../../src/lib/prisma";
 import { POST as acknowledgeImmediateActionPost } from "../../src/app/api/daemon/actions/ack/route";
 import { POST as registerImmediateActionPost } from "../../src/app/api/daemon/actions/register/route";
+import { GET as daemonSettingsGet } from "../../src/app/api/daemon/settings/route";
 import { POST as claimTasksPost } from "../../src/app/api/daemon/tasks/claim/route";
 import { POST as taskStatusPost } from "../../src/app/api/daemon/tasks/status/route";
 import { POST as taskActionPost } from "../../src/app/api/tasks/[taskId]/action/route";
 import { GET as listTaskResponsesGet } from "../../src/app/api/tasks/[taskId]/responses/route";
 
 async function resetDatabase(): Promise<void> {
+  await prisma.setting.deleteMany();
   await prisma.taskStatusUpdate.deleteMany();
   await prisma.taskResponse.deleteMany();
   await prisma.taskExecution.deleteMany();
@@ -306,4 +308,66 @@ test("immediate-action register and ack endpoints expose stable API contracts", 
 
   assert.equal(ack.status, 200);
   assert.equal(ackPayload.acknowledged, true);
+});
+
+test("daemon settings endpoint returns revisioned settings snapshots", async () => {
+  await resetDatabase();
+
+  const first = await daemonSettingsGet(
+    new Request("http://localhost/api/daemon/settings"),
+  );
+  assert.equal(first.status, 200);
+  const firstPayload = (await first.json()) as {
+    changed: boolean;
+    revision: string;
+    settings?: {
+      daemon_max_parallel_tasks: string;
+    };
+  };
+
+  assert.equal(firstPayload.changed, true);
+  assert.equal(typeof firstPayload.revision, "string");
+  assert.equal(typeof firstPayload.settings?.daemon_max_parallel_tasks, "string");
+
+  const second = await daemonSettingsGet(
+    new Request(`http://localhost/api/daemon/settings?revision=${firstPayload.revision}`),
+  );
+  assert.equal(second.status, 200);
+  const secondPayload = (await second.json()) as {
+    changed: boolean;
+    revision: string;
+    settings?: unknown;
+  };
+  assert.equal(secondPayload.changed, false);
+  assert.equal(secondPayload.revision, firstPayload.revision);
+  assert.equal(secondPayload.settings, undefined);
+
+  await prisma.setting.upsert({
+    create: {
+      key: "daemon_max_parallel_tasks",
+      value: "7",
+    },
+    update: {
+      value: "7",
+    },
+    where: {
+      key: "daemon_max_parallel_tasks",
+    },
+  });
+
+  const third = await daemonSettingsGet(
+    new Request(`http://localhost/api/daemon/settings?revision=${firstPayload.revision}`),
+  );
+  assert.equal(third.status, 200);
+  const thirdPayload = (await third.json()) as {
+    changed: boolean;
+    revision: string;
+    settings?: {
+      daemon_max_parallel_tasks: string;
+    };
+  };
+
+  assert.equal(thirdPayload.changed, true);
+  assert.notEqual(thirdPayload.revision, firstPayload.revision);
+  assert.equal(thirdPayload.settings?.daemon_max_parallel_tasks, "7");
 });

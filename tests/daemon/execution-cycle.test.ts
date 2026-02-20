@@ -9,6 +9,7 @@ import type { DaemonApiClient } from "../../scripts/daemon/api-client";
 import { runTaskExecutionCycle } from "../../scripts/daemon/execution-cycle";
 import { TaskScheduler } from "../../scripts/daemon/scheduler";
 import { StatusReporter } from "../../scripts/daemon/status-reporter";
+import type { FetchDaemonSettingsResponse } from "../../shared/contracts";
 import type {
   DaemonTask,
   DaemonTaskStatus,
@@ -33,6 +34,13 @@ class FakeApiClient implements DaemonApiClient {
 
   public async fetchImmediateActions(): Promise<ImmediateAction[]> {
     return [];
+  }
+
+  public async fetchRuntimeSettings(): Promise<FetchDaemonSettingsResponse> {
+    return {
+      changed: false,
+      revision: "fake",
+    };
   }
 
   public async completeImmediateAction(actionId: string): Promise<void> {

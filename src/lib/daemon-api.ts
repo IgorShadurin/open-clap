@@ -6,6 +6,7 @@ import type {
   ImmediateAction,
 } from "../../shared/contracts/task";
 import { selectParallelTasks } from "../../shared/logic/task-priority";
+import { publishAppSync } from "./live-sync";
 import { prisma } from "./prisma";
 import { buildHistoryBundle, selectRecentMessages } from "./task-history";
 
@@ -107,7 +108,7 @@ export async function claimNextTasks(limit: number): Promise<DaemonTask[]> {
   const normalizedLimit = clampLimit(limit);
   const now = new Date();
 
-  return prisma.$transaction(async (tx) => {
+  const claimedTasks = await prisma.$transaction(async (tx) => {
     const runningTasks = await tx.task.findMany({
       select: {
         id: true,
@@ -188,6 +189,12 @@ export async function claimNextTasks(limit: number): Promise<DaemonTask[]> {
 
     return attachPreviousContextHistory(tx, selected);
   });
+
+  if (claimedTasks.length > 0) {
+    publishAppSync("task.claimed");
+  }
+
+  return claimedTasks;
 }
 
 function mapStatus(status: DaemonTaskStatus): TaskStatus {
@@ -213,8 +220,9 @@ export async function updateTaskStatus(
 ): Promise<boolean> {
   const now = new Date();
   const dbStatus = mapStatus(status);
+  let changed = false;
 
-  return prisma.$transaction(async (tx) => {
+  const updated = await prisma.$transaction(async (tx) => {
     if (idempotencyKey) {
       const existing = await tx.taskStatusUpdate.findUnique({
         where: {
@@ -253,6 +261,7 @@ export async function updateTaskStatus(
     if (updated.count < 1) {
       return false;
     }
+    changed = true;
 
     if (typeof fullResponse === "string" && fullResponse.length > 0) {
       await tx.taskResponse.create({
@@ -292,6 +301,12 @@ export async function updateTaskStatus(
 
     return true;
   });
+
+  if (updated && changed) {
+    publishAppSync(`task.status.${status}`);
+  }
+
+  return updated;
 }
 
 export async function fetchPendingImmediateActions(): Promise<ImmediateAction[]> {

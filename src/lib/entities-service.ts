@@ -6,6 +6,8 @@ import type {
   SubprojectEntity,
   TaskEntity,
 } from "../../shared/contracts";
+import { publishAppSync } from "./live-sync";
+import { DEFAULT_TASK_REASONING } from "./task-reasoning";
 import { normalizeUserPath, validatePathExists } from "./path-validation";
 import { prisma } from "./prisma";
 
@@ -245,6 +247,7 @@ export async function createProject(input: {
       priority,
     },
   });
+  publishAppSync("project.created");
   return toProjectEntity(project);
 }
 
@@ -285,7 +288,7 @@ export async function updateProject(
         where: { projectId },
       }),
     ]);
-
+    publishAppSync("project.updated");
     return toProjectEntity(project);
   }
 
@@ -295,7 +298,7 @@ export async function updateProject(
       id: projectId,
     },
   });
-
+  publishAppSync("project.updated");
   return toProjectEntity(project);
 }
 
@@ -305,6 +308,7 @@ export async function deleteProject(projectId: string): Promise<void> {
       id: projectId,
     },
   });
+  publishAppSync("project.deleted");
 }
 
 export async function reorderProjects(orderedIds: string[]): Promise<void> {
@@ -316,6 +320,7 @@ export async function reorderProjects(orderedIds: string[]): Promise<void> {
       }),
     ),
   );
+  publishAppSync("project.reordered");
 }
 
 export async function moveProject(
@@ -378,6 +383,7 @@ export async function createSubproject(input: {
       projectId: input.projectId,
     },
   });
+  publishAppSync("subproject.created");
   return toSubprojectEntity(subproject);
 }
 
@@ -415,6 +421,7 @@ export async function updateSubproject(
     },
     where: { id: subprojectId },
   });
+  publishAppSync("subproject.updated");
   return toSubprojectEntity(subproject);
 }
 
@@ -424,6 +431,7 @@ export async function deleteSubproject(subprojectId: string): Promise<void> {
       id: subprojectId,
     },
   });
+  publishAppSync("subproject.deleted");
 }
 
 export async function reorderSubprojects(
@@ -438,6 +446,7 @@ export async function reorderSubprojects(
       }),
     ),
   );
+  publishAppSync("subproject.reordered");
 }
 
 export async function moveSubproject(
@@ -512,12 +521,13 @@ export async function createTask(input: {
       previousContextMessages: input.previousContextMessages ?? 0,
       priority,
       projectId: input.projectId,
-      reasoning: input.reasoning ?? "high",
+      reasoning: input.reasoning ?? DEFAULT_TASK_REASONING,
       subprojectId:
         typeof input.subprojectId === "string" ? input.subprojectId : null,
       text: input.text,
     },
   });
+  publishAppSync("task.created");
   return toTaskEntity(task);
 }
 
@@ -570,6 +580,7 @@ export async function updateTask(
     },
     where: { id: taskId },
   });
+  publishAppSync("task.updated");
   return toTaskEntity(task);
 }
 
@@ -577,6 +588,7 @@ export async function deleteTask(taskId: string): Promise<void> {
   await prisma.task.delete({
     where: { id: taskId },
   });
+  publishAppSync("task.deleted");
 }
 
 export async function reorderTasks(orderedIds: string[]): Promise<void> {
@@ -588,6 +600,7 @@ export async function reorderTasks(orderedIds: string[]): Promise<void> {
       }),
     ),
   );
+  publishAppSync("task.reordered");
 }
 
 export async function setTaskAction(
@@ -607,6 +620,7 @@ export async function setTaskAction(
       },
       where: { id: taskId },
     });
+    publishAppSync("task.paused");
     return;
   }
 
@@ -618,6 +632,7 @@ export async function setTaskAction(
       },
       where: { id: taskId },
     });
+    publishAppSync("task.resumed");
     return;
   }
 
@@ -651,6 +666,7 @@ export async function setTaskAction(
           type: "force_stop",
         },
       });
+      publishAppSync("task.stop_requested");
     }
     return;
   }
@@ -663,6 +679,7 @@ export async function setTaskAction(
     },
     where: { id: taskId },
   });
+  publishAppSync("task.stopped");
 }
 
 export async function listTaskResponses(
