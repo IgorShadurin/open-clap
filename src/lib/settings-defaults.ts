@@ -2,7 +2,7 @@ import type { SettingMap } from "./settings";
 
 export const DEFAULT_SETTINGS: SettingMap = {
   codex_command_template:
-    'codex run --cwd "{{contextPath}}" --model "{{model}}" --reasoning "{{reasoning}}" "{{message}}"',
+    'codex exec -C "{{contextPath}}" --model "{{model}}" "{{message}}\n\nReasoning: {{reasoning}}"',
   task_message_template: "Context:\n{{context}}\n\nTask:\n{{task}}",
   task_message_template_with_history:
     "History:\n{{history}}\n\nContext:\n{{context}}\n\nTask:\n{{task}}",

@@ -7,7 +7,6 @@ import { toast } from "sonner";
 
 import type { SettingRecord } from "../../shared/contracts";
 import { requestJson } from "./app-dashboard-helpers";
-import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import {
@@ -109,7 +108,9 @@ export function SettingsPage() {
                 <div className="rounded-md border border-black/10 p-3" key={setting.key}>
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <code className="text-xs">{setting.key}</code>
-                    <Badge>source: {setting.source}</Badge>
+                    <span className="rounded-sm border border-zinc-200 bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                      source: {setting.source}
+                    </span>
                   </div>
 
                   {shouldUseTextareaForSetting(setting.key) ? (
@@ -141,10 +142,10 @@ export function SettingsPage() {
                   </div>
                   <div className="mt-2 flex justify-end">
                     <Button
+                      className="gap-1.5"
                       onClick={() => void saveSetting(setting.key)}
                       size="sm"
                       type="button"
-                      variant="outline"
                     >
                       <Save className="h-4 w-4" />
                       Save

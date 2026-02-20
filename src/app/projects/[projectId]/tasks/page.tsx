@@ -1,16 +1,43 @@
-"use client";
-
-import { useParams, useSearchParams } from "next/navigation";
+import type { Metadata } from "next";
 
 import { ProjectTasksPage } from "@/components/project-tasks-page";
 
-export default function ProjectTasksRoutePage() {
-  const params = useParams<{ projectId: string | string[] }>();
-  const searchParams = useSearchParams();
+export const metadata: Metadata = {
+  title: "Tasks",
+  description:
+    "View and manage OpenClap task execution for a project or subproject, including ordering, pause/resume, and responses.",
+  keywords: [
+    "project tasks",
+    "subproject tasks",
+    "task execution control",
+    "pause resume tasks",
+    "task response history",
+    "OpenClap tasks",
+  ],
+};
 
-  const projectIdRaw = params.projectId;
-  const projectId = Array.isArray(projectIdRaw) ? projectIdRaw[0] : projectIdRaw;
-  const subprojectId = searchParams.get("subprojectId");
+interface ProjectTasksRoutePageProps {
+  params: {
+    projectId: string;
+  };
+  searchParams?: {
+    subprojectId?: string | string[];
+  };
+}
+
+function pickSingleParam(value: string | string[] | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  return Array.isArray(value) ? (value[0] ?? null) : value;
+}
+
+export default function ProjectTasksRoutePage({
+  params,
+  searchParams,
+}: ProjectTasksRoutePageProps) {
+  const projectId = params.projectId;
+  const subprojectId = pickSingleParam(searchParams?.subprojectId);
 
   if (!projectId) {
     return <div className="p-8 text-sm text-red-600">Project ID is missing.</div>;

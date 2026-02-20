@@ -98,6 +98,11 @@ test("runTaskExecutionCycle fetches by free slots and reports task completion", 
     scheduler,
     statusReporter,
     templates,
+    workerExecutor: async (task) => ({
+      finishedAt: new Date(),
+      fullResponse: `Fake worker response for ${task.id}`,
+      status: "done",
+    }),
   });
 
   assert.deepEqual(result, { fetched: 2, slotsRequested: 2, started: 2 });
@@ -108,7 +113,7 @@ test("runTaskExecutionCycle fetches by free slots and reports task completion", 
 
   const doneCalls = apiClient.statusCalls.filter((call) => call.status === "done");
   assert.equal(doneCalls.length, 2);
-  assert.equal(doneCalls.every((call) => call.fullResponse?.includes("Simulated Codex response")), true);
+  assert.equal(doneCalls.every((call) => call.fullResponse?.includes("Fake worker response")), true);
   assert.equal(scheduler.activeCount(), 0);
   assert.equal(runningTasks.size, 0);
   assert.equal(runningTaskScopeById.size, 0);
@@ -129,6 +134,11 @@ test("runTaskExecutionCycle skips fetching when there is no capacity", async () 
     scheduler,
     statusReporter: new StatusReporter(apiClient),
     templates,
+    workerExecutor: async (task) => ({
+      finishedAt: new Date(),
+      fullResponse: `Fake worker response for ${task.id}`,
+      status: "done",
+    }),
   });
 
   assert.deepEqual(result, { fetched: 0, slotsRequested: 0, started: 0 });

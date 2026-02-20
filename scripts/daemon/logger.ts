@@ -32,8 +32,19 @@ export function formatLogLine(
 }
 
 export function createLogger(writer: (line: string) => void = console.log) {
+  let lastWaitingMessage: string | null = null;
+
   return {
     log(status: LogStatus, message: string, at?: Date): void {
+      if (status === "waiting") {
+        if (lastWaitingMessage === message) {
+          return;
+        }
+        lastWaitingMessage = message;
+      } else {
+        lastWaitingMessage = null;
+      }
+
       writer(formatLogLine(status, message, at));
     },
   };

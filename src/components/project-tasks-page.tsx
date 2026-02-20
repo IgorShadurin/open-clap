@@ -55,6 +55,15 @@ interface ProjectTasksPageProps {
   subprojectId?: string | null;
 }
 
+function truncateTaskPreview(text: string, limit = 100): string {
+  const normalized = text.trim();
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, limit).trimEnd()}...`;
+}
+
 export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPageProps) {
   const [projects, setProjects] = useState<ProjectTree[]>([]);
   const [loading, setLoading] = useState(true);
@@ -66,6 +75,7 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
 
   const [createTaskModalOpen, setCreateTaskModalOpen] = useState(false);
   const [createSubprojectModalOpen, setCreateSubprojectModalOpen] = useState(false);
+  const [deleteTaskTarget, setDeleteTaskTarget] = useState<TaskEntity | null>(null);
   const [editTaskTarget, setEditTaskTarget] = useState<TaskEntity | null>(null);
   const [editTaskText, setEditTaskText] = useState("");
   const [editTaskModel, setEditTaskModel] = useState("");
@@ -116,6 +126,11 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
     return selectedProject.tasks;
   }, [selectedProject, selectedSubproject, subprojectId]);
 
+  const visibleSelectedTasks = useMemo(
+    () => selectedTasks.filter((task) => task.status !== "done"),
+    [selectedTasks],
+  );
+
   const handleTaskAction = async (
     taskId: string,
     action: "pause" | "remove" | "resume" | "stop",
@@ -131,6 +146,15 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to update task action");
     }
+  };
+
+  const handleConfirmTaskDelete = async () => {
+    if (!deleteTaskTarget) {
+      return;
+    }
+
+    await handleTaskAction(deleteTaskTarget.id, "remove");
+    setDeleteTaskTarget(null);
   };
 
   const handleTaskEdit = async (task: TaskEntity) => {
@@ -193,7 +217,7 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
       return;
     }
 
-    const currentOrder = selectedTasks.map((task) => task.id);
+    const currentOrder = visibleSelectedTasks.map((task) => task.id);
     const fromIndex = currentOrder.findIndex((id) => id === draggingTaskId);
     const toIndex = currentOrder.findIndex((id) => id === targetTaskId);
     if (fromIndex < 0 || toIndex < 0) {
@@ -332,18 +356,18 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
 
         <Card>
           <CardHeader>
-            <CardTitle>
-              {tasksSectionTitle} ({selectedTasks.length})
+              <CardTitle>
+              {tasksSectionTitle} ({visibleSelectedTasks.length})
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {selectedTasks.length < 1 ? (
+            {visibleSelectedTasks.length < 1 ? (
               <div className="rounded-md border border-dashed border-black/15 px-3 py-2 text-sm text-zinc-500">
-                No tasks in this scope.
+                No active tasks in this scope.
               </div>
             ) : null}
 
-            {selectedTasks.map((task) => (
+            {visibleSelectedTasks.map((task) => (
               <div
                 className="flex flex-wrap items-center gap-2 rounded border border-black/10 bg-white p-2"
                 draggable
@@ -421,7 +445,7 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
                 <Button
                   aria-label="Remove task"
                   className="h-8 w-8 rounded-full border-red-200 p-0 text-red-700 hover:bg-red-50"
-                  onClick={() => void handleTaskAction(task.id, "remove")}
+                  onClick={() => setDeleteTaskTarget(task)}
                   size="sm"
                   title="Remove task"
                   type="button"
@@ -447,6 +471,38 @@ export function ProjectTasksPage({ projectId, subprojectId }: ProjectTasksPagePr
           <DialogFooter>
             <Button onClick={() => setErrorMessage(null)} type="button" variant="outline">
               Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteTaskTarget(null);
+          }
+        }}
+        open={Boolean(deleteTaskTarget)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Task</DialogTitle>
+            <DialogDescription>
+              Delete task <strong>{truncateTaskPreview(deleteTaskTarget?.text ?? "")}</strong>? This action
+              cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setDeleteTaskTarget(null)} type="button" variant="outline">
+              Cancel
+            </Button>
+            <Button
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={() => void handleConfirmTaskDelete()}
+              type="button"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete
             </Button>
           </DialogFooter>
         </DialogContent>

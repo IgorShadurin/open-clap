@@ -4,6 +4,7 @@ import type { LogStatus } from "./logger";
 import { TaskScheduler } from "./scheduler";
 import { StatusReporter } from "./status-reporter";
 import type { WorkerTemplates } from "./template-renderer";
+import type { TaskAuditLogger } from "./task-audit-log";
 import type { DaemonTask, TaskExecutionResult } from "../../shared/contracts/task";
 import { executeTask } from "./worker";
 import {
@@ -27,10 +28,17 @@ export interface RunTaskExecutionCycleOptions {
   runningTaskScopeById: Map<string, string>;
   scheduler: TaskScheduler;
   statusReporter: StatusReporter;
+  taskAuditLogger?: TaskAuditLogger;
   templates: WorkerTemplates;
+  codexCommandTemplate?: string;
   workerExecutor?: (
     task: DaemonTask,
     templates: WorkerTemplates,
+    context?: {
+      auditLogger?: TaskAuditLogger;
+      codexCommandTemplate?: string;
+      signal?: AbortSignal;
+    },
   ) => Promise<TaskExecutionResult>;
 }
 
@@ -48,7 +56,9 @@ export async function runTaskExecutionCycle({
   runningTaskScopeById,
   scheduler,
   statusReporter,
+  taskAuditLogger,
   templates,
+  codexCommandTemplate,
   workerExecutor = executeTask,
 }: RunTaskExecutionCycleOptions): Promise<ExecutionCycleResult> {
   const slotsRequested = scheduler.availableSlots();
@@ -90,6 +100,7 @@ export async function runTaskExecutionCycle({
 
   for (const task of claimedTasks) {
     const scopeKey = getExecutionScopeKey(task);
+    const abortController = new AbortController();
 
     const control: TaskControl = {
       stopped: false,
@@ -99,6 +110,11 @@ export async function runTaskExecutionCycle({
         }
 
         control.stopped = true;
+        abortController.abort();
+        taskAuditLogger?.log("stopped", "Force-stop requested", {
+          scopeKey,
+          taskId: task.id,
+        });
         await statusReporter.report(
           task.id,
           "stopped",
@@ -117,7 +133,11 @@ export async function runTaskExecutionCycle({
 
     const workerPromise = (async () => {
       try {
-        const result = await workerExecutor(task, templates);
+        const result = await workerExecutor(task, templates, {
+          auditLogger: taskAuditLogger,
+          codexCommandTemplate,
+          signal: abortController.signal,
+        });
 
         if (control.stopped) {
           return;

@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { toast } from "sonner";
 
 import type { ProjectEntity, SubprojectEntity, TaskEntity } from "../../shared/contracts";
@@ -73,6 +74,15 @@ function formatTaskDateTime(value: string): string {
   return TASK_DATE_FORMATTER.format(parsed);
 }
 
+function truncateTaskPreview(text: string, limit = 100): string {
+  const normalized = text.trim();
+  if (normalized.length <= limit) {
+    return normalized;
+  }
+
+  return `${normalized.slice(0, limit).trimEnd()}...`;
+}
+
 function isProjectTasksVisibleOnMainPage(project: ProjectTree): boolean {
   return project.mainPageTasksVisible;
 }
@@ -120,6 +130,10 @@ export function MainProjectsPage() {
     id: string;
     name: string;
     path: string;
+  } | null>(null);
+  const [deleteTaskTarget, setDeleteTaskTarget] = useState<{
+    id: string;
+    text: string;
   } | null>(null);
   const [deleteSubprojectTarget, setDeleteSubprojectTarget] = useState<{
     id: string;
@@ -280,9 +294,9 @@ export function MainProjectsPage() {
     }
   };
 
-  const handleProjectTaskRemove = async (task: TaskEntity) => {
+  const handleProjectTaskRemove = async (taskId: string) => {
     try {
-      await requestJson(`/api/tasks/${task.id}/action`, {
+      await requestJson(`/api/tasks/${taskId}/action`, {
         body: JSON.stringify({ action: "remove" }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
@@ -387,6 +401,22 @@ export function MainProjectsPage() {
     }
   };
 
+  const handleInlineTaskTextInputKeyDown = (
+    event: KeyboardEvent<HTMLInputElement>,
+    project: ProjectTree,
+  ) => {
+    if (event.key !== "Tab" || event.shiftKey) {
+      return;
+    }
+
+    if (event.currentTarget.value.trim().length < 1) {
+      return;
+    }
+
+    event.preventDefault();
+    void handleInlineTaskSubmit(project);
+  };
+
   const handleProjectTasksListToggle = async (project: ProjectTree) => {
     const visibleNow = isProjectTasksVisibleOnMainPage(project);
     const nextVisible = !visibleNow;
@@ -475,7 +505,9 @@ export function MainProjectsPage() {
       return;
     }
 
-    const currentOrder = project.tasks.map((task) => task.id);
+    const currentOrder = project.tasks
+      .filter((task) => task.status !== "done")
+      .map((task) => task.id);
     const fromIndex = currentOrder.findIndex((id) => id === draggingProjectTask.taskId);
     const toIndex = currentOrder.findIndex((id) => id === targetTaskId);
     if (fromIndex < 0 || toIndex < 0) {
@@ -516,6 +548,15 @@ export function MainProjectsPage() {
     }
   };
 
+  const handleConfirmTaskDelete = async () => {
+    if (!deleteTaskTarget) {
+      return;
+    }
+
+    await handleProjectTaskRemove(deleteTaskTarget.id);
+    setDeleteTaskTarget(null);
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-zinc-100 p-4 md:p-8">
       <div className="mx-auto w-full max-w-6xl space-y-6">
@@ -529,19 +570,17 @@ export function MainProjectsPage() {
               OpenClap
             </Link>
             <div className="w-[320px] space-y-3 rounded-md border border-black/10 bg-white/70 p-4">
-              <div className="flex items-center justify-between text-sm font-medium">
+              <div className="flex items-center text-sm font-medium">
                 <div className="flex items-center gap-2">
                   <span
                     aria-label={DUMMY_CODEX_CONNECTED ? "Connected" : "Disconnected"}
+                    title={`Codex status: ${DUMMY_CODEX_CONNECTED ? "Connected" : "Disconnected"}`}
                     className={`h-2.5 w-2.5 rounded-full ${
                       DUMMY_CODEX_CONNECTED ? "bg-emerald-500" : "bg-red-500"
                     }`}
                   />
                   <span>Codex connection</span>
                 </div>
-                <span className="text-sm text-zinc-700">
-                  {DUMMY_CODEX_CONNECTED ? "Connected" : "Disconnected"}
-                </span>
               </div>
 
               <div className="space-y-1">
@@ -615,6 +654,7 @@ export function MainProjectsPage() {
         {projects.map((project) => {
           const projectTasksVisible = isProjectTasksVisibleOnMainPage(project);
           const projectSubprojectsVisible = isProjectSubprojectsVisibleOnMainPage(project);
+          const visibleProjectTasks = project.tasks.filter((task) => task.status !== "done");
           return (
             <div
               className="cursor-grab active:cursor-grabbing"
@@ -849,6 +889,9 @@ export function MainProjectsPage() {
                               onFocus={() =>
                                 updateInlineTaskDraft(project.id, { settingsExpanded: true })
                               }
+                              onKeyDown={(event) =>
+                                handleInlineTaskTextInputKeyDown(event, project)
+                              }
                               placeholder="Add task"
                               value={getInlineTaskDraft(project.id).text}
                             />
@@ -922,12 +965,12 @@ export function MainProjectsPage() {
                           ) : null}
                         </form>
 
-                        {project.tasks.length < 1 ? (
+                        {visibleProjectTasks.length < 1 ? (
                           <div className="rounded-md border border-dashed border-black/15 px-3 py-2 text-sm text-zinc-500">
-                            No project tasks
+                            No active tasks
                           </div>
                         ) : (
-                          project.tasks.map((task) => (
+                          visibleProjectTasks.map((task) => (
                             <div
                               className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-start gap-2 rounded-md border border-black/10 bg-white px-3 py-2"
                               draggable
@@ -969,7 +1012,7 @@ export function MainProjectsPage() {
                                 <span className="sr-only">{task.paused ? "Resume task" : "Pause task"}</span>
                               </Button>
                               <button
-                                className="min-w-0 break-words pt-1 text-left text-sm leading-relaxed hover:underline"
+                                className="min-w-0 cursor-pointer break-words pt-1 text-left text-sm leading-relaxed hover:underline"
                                 draggable={false}
                                 onClick={() => openTaskDetails(project, task)}
                                 onMouseDown={stopDragPropagation}
@@ -985,7 +1028,12 @@ export function MainProjectsPage() {
                                 onDragStart={preventControlDragStart}
                                 onMouseDown={stopDragPropagation}
                                 onPointerDown={stopDragPropagation}
-                                onClick={() => void handleProjectTaskRemove(task)}
+                                onClick={() =>
+                                  setDeleteTaskTarget({
+                                    id: task.id,
+                                    text: task.text,
+                                  })
+                                }
                                 size="sm"
                                 title={`Remove task ${task.text}`}
                                 type="button"
@@ -1044,6 +1092,38 @@ export function MainProjectsPage() {
       <Dialog
         onOpenChange={(open) => {
           if (!open) {
+            setDeleteTaskTarget(null);
+          }
+        }}
+        open={Boolean(deleteTaskTarget)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Task</DialogTitle>
+            <DialogDescription>
+              Delete task <strong>{truncateTaskPreview(deleteTaskTarget?.text ?? "")}</strong>? This action
+              cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setDeleteTaskTarget(null)} type="button" variant="outline">
+              Cancel
+            </Button>
+            <Button
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={() => void handleConfirmTaskDelete()}
+              type="button"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) {
             setDeleteSubprojectTarget(null);
           }
         }}
@@ -1083,29 +1163,23 @@ export function MainProjectsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ListTodo className="h-4 w-4" />
-              Task Details
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <ListTodo className="h-4 w-4 text-zinc-500" />
+              Task
             </DialogTitle>
-            <DialogDescription asChild>
-              <div>
-                {taskDetailsTarget ? (
-                  <div className="space-y-1">
-                    <div>Project: {taskDetailsTarget.projectName}</div>
-                    <div className="text-xs">
-                      Created: {formatTaskDateTime(taskDetailsTarget.task.createdAt)}
-                    </div>
-                    <div className="text-xs">
-                      Updated: {formatTaskDateTime(taskDetailsTarget.task.updatedAt)}
-                    </div>
-                  </div>
-                ) : (
-                  ""
-                )}
-              </div>
+            <DialogDescription className="text-sm text-zinc-600">
+              {taskDetailsTarget ? `Project: ${taskDetailsTarget.projectName}` : ""}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
+            {taskDetailsTarget ? (
+              <div className="rounded-md border border-black/10 bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                  <span>Created: {formatTaskDateTime(taskDetailsTarget.task.createdAt)}</span>
+                  <span>Updated: {formatTaskDateTime(taskDetailsTarget.task.updatedAt)}</span>
+                </div>
+              </div>
+            ) : null}
             <Textarea
               disabled={!taskDetailsTarget || !canEditTask(taskDetailsTarget.task)}
               onChange={(event) => setTaskDetailsText(event.target.value)}

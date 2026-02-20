@@ -14,8 +14,30 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "OpenClap",
-  description: "Task orchestration and codex workload management",
+  title: {
+    default: "OpenClap",
+    template: "%s | OpenClap",
+  },
+  description:
+    "OpenClap is a local-first orchestration system for high-volume AI task execution across projects and subprojects.",
+  keywords: [
+    "OpenClap",
+    "AI orchestration",
+    "local-first task manager",
+    "Codex task management",
+    "project automation",
+    "subproject orchestration",
+    "parallel task pipelines",
+  ],
+  icons: {
+    icon: [
+      { url: "/favicon-16x16.png", sizes: "16x16", type: "image/png" },
+      { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
+      { url: "/favicon-192x192.png", sizes: "192x192", type: "image/png" },
+    ],
+    shortcut: "/favicon-32x32.png",
+    apple: "/apple-touch-icon.png",
+  },
 };
 
 export default function RootLayout({

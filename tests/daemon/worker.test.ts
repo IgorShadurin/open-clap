@@ -55,9 +55,41 @@ test("executeTask returns done result with full response", async () => {
     includeHistory: false,
   };
 
-  const result = await executeTask(task, templates);
+  const result = await executeTask(task, templates, {
+    codexCommandTemplate: 'codex exec -C "{{contextPath}}" --model "{{model}}" "{{message}}"',
+    commandRunner: async () => ({
+      code: 0,
+      signal: null,
+      stderr: "",
+      stdout: "ok from codex",
+    }),
+  });
 
   assert.equal(result.status, "done");
-  assert.equal(result.fullResponse.includes("Simulated Codex response"), true);
+  assert.equal(result.fullResponse.includes("ok from codex"), true);
   assert.equal(result.finishedAt instanceof Date, true);
+});
+
+test("executeTask throws when codex command fails", async () => {
+  const task: DaemonTask = {
+    id: "t4",
+    text: "Execute fail",
+    contextPath: "/tmp/project",
+    model: "gpt-5.3-codex",
+    reasoning: "high",
+    includeHistory: false,
+  };
+
+  await assert.rejects(
+    executeTask(task, templates, {
+      codexCommandTemplate: 'codex exec -C "{{contextPath}}" --model "{{model}}" "{{message}}"',
+      commandRunner: async () => ({
+        code: 2,
+        signal: null,
+        stderr: "command failed",
+        stdout: "",
+      }),
+    }),
+    /Codex command failed/,
+  );
 });
