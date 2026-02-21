@@ -14,7 +14,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:validate": "prisma validate",
-    "test": "node scripts/run-tests.mjs all"
+    "test": "node scripts/run-tests.mjs all",
+    "pretest": "npx prisma generate"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.4.0",

@@ -466,7 +466,7 @@ export function SkillsPage() {
           </div>
           <Button onClick={() => setCreateDialogOpen(true)} type="button">
             <Plus className="h-4 w-4" />
-            Create skills
+            Create skill
           </Button>
         </div>
         <input
@@ -944,7 +944,7 @@ export function SkillsPage() {
                 type="button"
               >
                 <Plus className="h-4 w-4" />
-                Create skills
+                Create skill
               </Button>
             </DialogFooter>
           </DialogContent>
