@@ -430,6 +430,17 @@ export function TaskQuickAdd({
     if (disableTextInput) {
       return;
     }
+
+    if (event.key === "Enter") {
+      if (event.metaKey || event.ctrlKey) {
+        return;
+      }
+
+      event.preventDefault();
+      void handleSubmit();
+      return;
+    }
+
     if (event.key !== "Tab" || event.shiftKey) {
       return;
     }
