@@ -6,6 +6,15 @@ import path from "node:path";
 const args = process.argv.slice(2);
 const mode = args.find((arg) => !arg.startsWith("--")) ?? "all";
 const verbose = args.includes("--verbose") || process.env.OPENCLAP_TEST_VERBOSE === "1";
+const serialFlag = args.includes("--serial");
+const jobsArg = args.find((arg) => arg.startsWith("--jobs="));
+const requestedWorkers = jobsArg ? Number.parseInt(jobsArg.split("=")[1], 10) : NaN;
+const cpuCount = Number.isInteger(os.cpus().length) ? os.cpus().length : 1;
+const safeMaxWorkers = Math.max(1, Math.min(cpuCount, 8));
+const defaultWorkers = serialFlag ? 1 : safeMaxWorkers;
+const maxWorkers = Number.isInteger(requestedWorkers) && requestedWorkers > 0
+  ? Math.min(requestedWorkers, safeMaxWorkers)
+  : defaultWorkers;
 
 function collectTestFiles(rootDir) {
   const result = [];
@@ -56,10 +65,6 @@ function runCommand(command, args, env) {
 
     child.on("error", (error) => reject(error));
     child.on("exit", (code) => {
-      if (!verbose && stderr.length > 0) {
-        process.stderr.write(stderr);
-      }
-
       if (code === 0) {
         resolve({ stdout, stderr });
         return;
@@ -119,6 +124,8 @@ async function main() {
   const rootDir = process.cwd();
   const searchRoots = mode === "daemon" ? ["tests/daemon"] : ["tests"];
   const files = searchRoots.flatMap((relativeRoot) => collectTestFiles(path.join(rootDir, relativeRoot)));
+  const safeWorkers = verbose ? 1 : maxWorkers;
+  const workerCount = Math.max(1, safeWorkers);
 
   if (files.length < 1) {
     console.error("No test files found.");
@@ -129,14 +136,62 @@ async function main() {
   let totalPassed = 0;
   let totalFailed = 0;
   let filesWithFailures = 0;
+  const results = new Array(files.length);
+  let nextIndex = 0;
 
-  for (const filePath of files) {
-    const summary = await runTestFile(filePath);
+  const runWorker = async () => {
+    while (nextIndex < files.length) {
+      const current = nextIndex++;
+      const filePath = files[current];
+
+      try {
+        const summary = await runTestFile(filePath);
+        results[current] = summary;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const failedSummary = {
+          filePath,
+          tests: "?",
+          pass: "?",
+          fail: "1",
+          message,
+        };
+        results[current] = failedSummary;
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, runWorker));
+
+  if (results.every((item) => item === undefined)) {
+    console.error("No test files were executed.");
+    process.exitCode = 1;
+    return;
+  }
+
+  for (const summary of results) {
+    if (!summary) {
+      continue;
+    }
+
     const relativePath = path.relative(rootDir, summary.filePath);
-
     const testsCount = summary.tests === "?" ? summary.tests : Number(summary.tests);
     const passCount = summary.pass === "?" ? summary.pass : Number(summary.pass);
     const failCount = summary.fail === "?" ? summary.fail : Number(summary.fail);
+
+    if (typeof failCount === "number" && failCount > 0) {
+      console.log(`[fail] ${relativePath} (${summary.pass}/${summary.tests}, failed: ${summary.fail})`);
+      if (!verbose && summary.message) {
+        const firstLine = summary.message.split("\n")[0];
+        if (firstLine) {
+          console.log(`  ${firstLine}`);
+        }
+      }
+    } else if (testsCount === "?" || passCount === "?" || failCount === "?") {
+      console.log(`[ok] ${relativePath}`);
+    } else {
+      console.log(`[ok] ${relativePath} (${summary.pass}/${summary.tests})`);
+    }
 
     if (typeof testsCount === "number" && !Number.isNaN(testsCount)) {
       totalTests += testsCount;
@@ -149,21 +204,12 @@ async function main() {
     if (typeof failCount === "number" && failCount > 0) {
       totalFailed += failCount;
       filesWithFailures += 1;
-      console.log(`[fail] ${relativePath} (${summary.pass}/${summary.tests}, failed: ${summary.fail})`);
-    } else if (testsCount === "?" || passCount === "?" || failCount === "?") {
-      console.log(`[ok] ${relativePath}`);
-    } else {
-      console.log(`[ok] ${relativePath} (${summary.pass}/${summary.tests})`);
-    }
-
-    if (typeof testsCount !== "number" || typeof passCount !== "number") {
-      continue;
     }
   }
 
   const totalSuffix = totalFailed > 0 ? ` (${totalFailed} failed)` : "";
   console.log(
-    `\nTest summary: ${files.length} files, ${totalPassed}/${totalTests} tests passed${totalSuffix}`,
+    `\nTest summary: ${files.length} files, ${totalPassed}/${totalTests} tests passed${totalSuffix} (parallel=${workerCount})`,
   );
   if (filesWithFailures > 0) {
     process.exitCode = 1;
