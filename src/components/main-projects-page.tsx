@@ -287,6 +287,7 @@ export function MainProjectsPage() {
   const [taskDetailsContextCount, setTaskDetailsContextCount] = useState(0);
   const [taskDetailsSubmitting, setTaskDetailsSubmitting] = useState(false);
   const [codexConnected, setCodexConnected] = useState(false);
+  const [codexUsageLoaded, setCodexUsageLoaded] = useState(false);
   const [codexWeeklyLimitUsedPercent, setCodexWeeklyLimitUsedPercent] = useState(0);
   const [codexFiveHourLimitUsedPercent, setCodexFiveHourLimitUsedPercent] = useState(0);
   const [codexConnectionError, setCodexConnectionError] = useState<string | null>(null);
@@ -398,6 +399,8 @@ export function MainProjectsPage() {
       setCodexWeeklyResetAt(null);
       setCodexUsageEndpoint(null);
       setCodexUsageCheckedAt(new Date().toISOString());
+    } finally {
+      setCodexUsageLoaded(true);
     }
   }, []);
 
@@ -1086,6 +1089,23 @@ export function MainProjectsPage() {
       codexUsageCheckedAt ? new Date(codexUsageCheckedAt).toLocaleString() : "n/a"
     }`,
   ].join("\n");
+  const codexConnectionStateLabel = codexUsageLoaded
+    ? codexConnected
+      ? "Connected"
+      : "Disconnected"
+    : "Checking";
+  const codexConnectionStateTitle = codexUsageLoaded
+    ? codexConnected
+      ? "Codex status: Connected"
+      : codexConnectionError
+        ? `Codex status: Disconnected: ${codexConnectionError}`
+        : "Codex status: Disconnected"
+    : "Codex status: Checking";
+  const codexConnectionDotClass = codexUsageLoaded
+    ? codexConnected
+      ? "bg-emerald-500"
+      : "bg-red-500"
+    : "bg-zinc-400";
   const codexFiveHourLimitRemainingPercent = codexConnected
     ? normalizePercent(100 - codexFiveHourLimitUsedPercent)
     : 0;
@@ -1134,17 +1154,9 @@ export function MainProjectsPage() {
               <div className="flex items-center text-sm font-medium">
                 <div className="flex items-center gap-2">
                   <span
-                    aria-label={codexConnected ? "Connected" : "Disconnected"}
-                    title={`Codex status: ${
-                      codexConnected
-                        ? "Connected"
-                        : codexConnectionError
-                          ? `Disconnected: ${codexConnectionError}`
-                          : "Disconnected"
-                    }`}
-                    className={`h-2.5 w-2.5 rounded-full ${
-                      codexConnected ? "bg-emerald-500" : "bg-red-500"
-                    }`}
+                    aria-label={codexConnectionStateLabel}
+                    title={codexConnectionStateTitle}
+                    className={`h-2.5 w-2.5 rounded-full ${codexConnectionDotClass}`}
                   />
                   <span>Codex connection</span>
                 </div>
