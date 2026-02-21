@@ -33,6 +33,10 @@ class FakeApiClient implements DaemonApiClient {
     };
   }
 
+  public async fetchCodexUsageState(): Promise<{ fiveHourUsedPercent: number } | null> {
+    return null;
+  }
+
   public async completeImmediateAction(actionId: string): Promise<void> {
     this.completedActionIds.push(actionId);
   }

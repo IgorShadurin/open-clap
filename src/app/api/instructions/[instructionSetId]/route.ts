@@ -15,6 +15,7 @@ import {
 interface UpdateInstructionSetBody {
   description?: string | null;
   mainPageTasksVisible?: boolean;
+  linkedInstructionSetIds?: string[];
   name?: string;
 }
 
@@ -42,6 +43,32 @@ export async function PATCH(
   } catch {
     return NextResponse.json<ApiErrorShape>(
       createApiError("INVALID_JSON", "Invalid JSON request body"),
+      { status: 400 },
+    );
+  }
+
+  if (
+    body.linkedInstructionSetIds !== undefined &&
+    !Array.isArray(body.linkedInstructionSetIds)
+  ) {
+    return NextResponse.json<ApiErrorShape>(
+      createApiError(
+        "INVALID_PAYLOAD",
+        "Field `linkedInstructionSetIds` must be an array of string IDs",
+      ),
+      { status: 400 },
+    );
+  }
+
+  const hasInvalidLinkedId =
+    body.linkedInstructionSetIds !== undefined &&
+    !body.linkedInstructionSetIds.every((id) => typeof id === "string");
+  if (hasInvalidLinkedId) {
+    return NextResponse.json<ApiErrorShape>(
+      createApiError(
+        "INVALID_PAYLOAD",
+        "All values in `linkedInstructionSetIds` must be strings",
+      ),
       { status: 400 },
     );
   }

@@ -27,6 +27,7 @@ class FakeApiClient implements DaemonApiClient {
     fullResponse?: string;
   }> = [];
   public queuedTasks: DaemonTask[] = [];
+  public fiveHourUsage: number[] = [];
 
   public async acknowledgeImmediateAction(actionId: string): Promise<void> {
     this.acknowledgedActions.push(actionId);
@@ -41,6 +42,15 @@ class FakeApiClient implements DaemonApiClient {
       changed: false,
       revision: "fake",
     };
+  }
+
+  public async fetchCodexUsageState(): Promise<{ fiveHourUsedPercent: number } | null> {
+    const usage = this.fiveHourUsage.shift();
+    if (typeof usage !== "number") {
+      return null;
+    }
+
+    return { fiveHourUsedPercent: usage };
   }
 
   public async completeImmediateAction(actionId: string): Promise<void> {
@@ -85,6 +95,7 @@ function createTask(taskId: string): DaemonTask {
 test("runTaskExecutionCycle fetches by free slots and reports task completion", async () => {
   const apiClient = new FakeApiClient();
   apiClient.queuedTasks = [createTask("t1"), createTask("t2"), createTask("t3")];
+  apiClient.fiveHourUsage = [50];
 
   const scheduler = new TaskScheduler(2);
   const runningTasks = new Map();
@@ -130,6 +141,7 @@ test("runTaskExecutionCycle fetches by free slots and reports task completion", 
 
 test("runTaskExecutionCycle skips fetching when there is no capacity", async () => {
   const apiClient = new FakeApiClient();
+  apiClient.fiveHourUsage = [50];
   const scheduler = new TaskScheduler(1);
   scheduler.startTask("occupied");
 
@@ -175,6 +187,7 @@ test("runTaskExecutionCycle starts at most one task per project/subproject scope
     }
     return { ...task, projectId: "p1", subprojectId: null };
   });
+  apiClient.fiveHourUsage = [50];
 
   const scheduler = new TaskScheduler(10);
   const result = await runTaskExecutionCycle({
@@ -197,6 +210,7 @@ test("runTaskExecutionCycle starts at most one task per project/subproject scope
 test("runTaskExecutionCycle force-stop prevents duplicate done status", async () => {
   const apiClient = new FakeApiClient();
   apiClient.queuedTasks = [createTask("force-stop-task")];
+  apiClient.fiveHourUsage = [50];
 
   const scheduler = new TaskScheduler(1);
   const runningTasks = new Map();
@@ -243,4 +257,97 @@ test("runTaskExecutionCycle force-stop prevents duplicate done status", async ()
 
   assert.equal(stoppedCalls.length, 1);
   assert.equal(doneCalls.length, 0);
+});
+
+test("runTaskExecutionCycle waits when 5h remaining is below threshold", async () => {
+  const apiClient = new FakeApiClient();
+  apiClient.queuedTasks = [createTask("low-limit-task")];
+  apiClient.fiveHourUsage = [99];
+
+  const scheduler = new TaskScheduler(1);
+  const logs: Array<{ message: string; status: string }> = [];
+
+  const result = await runTaskExecutionCycle({
+    activeWorkers: new Map(),
+    apiClient,
+    logger: {
+      log(status, message): void {
+        logs.push({ message, status });
+      },
+    },
+    runningTasks: new Map(),
+    runningTaskScopeById: new Map(),
+    scheduler,
+    statusReporter: new StatusReporter(apiClient),
+    templates,
+    workerExecutor: async () => ({
+      finishedAt: new Date(),
+      fullResponse: "",
+      status: "done",
+    }),
+  });
+
+  assert.deepEqual(result, { fetched: 0, slotsRequested: 1, started: 0 });
+  assert.deepEqual(apiClient.fetchCalls, []);
+  assert.equal(logs.some((log) => log.status === "waiting"), true);
+  assert.equal(logs.some((log) => log.message.includes("5h limit remaining")), true);
+});
+
+test("runTaskExecutionCycle waits when usage metrics are unavailable", async () => {
+  const apiClient = new FakeApiClient();
+  apiClient.queuedTasks = [createTask("metric-unknown-task")];
+  const scheduler = new TaskScheduler(1);
+  const logs: Array<{ message: string; status: string }> = [];
+  const result = await runTaskExecutionCycle({
+    activeWorkers: new Map(),
+    apiClient,
+    logger: {
+      log(status, message): void {
+        logs.push({ message, status });
+      },
+    },
+    runningTasks: new Map(),
+    runningTaskScopeById: new Map(),
+    scheduler,
+    statusReporter: new StatusReporter(apiClient),
+    templates,
+    workerExecutor: async () => ({
+      finishedAt: new Date(),
+      fullResponse: "",
+      status: "done",
+    }),
+  });
+
+  assert.deepEqual(result, { fetched: 0, slotsRequested: 1, started: 0 });
+  assert.deepEqual(apiClient.fetchCalls, []);
+  assert.equal(logs.some((log) => log.message.includes("5h usage metrics unavailable")), true);
+});
+
+test("runTaskExecutionCycle resumes when 5h remaining rises above threshold", async () => {
+  const apiClient = new FakeApiClient();
+  apiClient.queuedTasks = [createTask("ok-task")];
+  apiClient.fiveHourUsage = [96];
+
+  const scheduler = new TaskScheduler(1);
+  const activeWorkers = new Map<string, Promise<void>>();
+
+  const result = await runTaskExecutionCycle({
+    activeWorkers,
+    apiClient,
+    logger: { log: () => {} },
+    runningTasks: new Map(),
+    runningTaskScopeById: new Map(),
+    scheduler,
+    statusReporter: new StatusReporter(apiClient),
+    templates,
+    workerExecutor: async () => ({
+      finishedAt: new Date(),
+      fullResponse: "Fake worker response",
+      status: "done",
+    }),
+  });
+
+  assert.deepEqual(result, { fetched: 1, slotsRequested: 1, started: 1 });
+  assert.deepEqual(apiClient.fetchCalls, [1]);
+  await Promise.allSettled([...activeWorkers.values()]);
 });

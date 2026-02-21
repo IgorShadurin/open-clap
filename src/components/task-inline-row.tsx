@@ -1,6 +1,6 @@
 "use client";
 
-import { GripVertical, Pause, Play, Square, X } from "lucide-react";
+import { BookText, GripVertical, Pause, Play, Square, X } from "lucide-react";
 import type {
   DragEventHandler,
   MouseEventHandler,
@@ -34,6 +34,7 @@ interface TaskInlineRowProps {
   paused?: boolean;
   showGrip?: boolean;
   text: string;
+  sourceInstructionSetName?: string;
   textActionTitle?: string;
 }
 
@@ -61,21 +62,21 @@ export function TaskInlineRow({
   onControlPointerDown,
   paused = false,
   showGrip = true,
+  sourceInstructionSetName,
   text,
   textActionTitle = "Edit task",
 }: TaskInlineRowProps) {
   const hasPauseControls = allowPause && !locked;
-  const showPauseControl = (inProgress && Boolean(onStop)) || (Boolean(onPauseToggle) && hasPauseControls);
+  const canTogglePause = Boolean(onPauseToggle) && hasPauseControls;
+  const canStop = Boolean(onStop) && inProgress;
+  const showPauseControl = canStop || canTogglePause;
   const pauseTitle = locked
     ? "Task is currently executing and cannot be changed"
     : paused
       ? "Resume task"
       : "Pause task";
-
-  const canTogglePause = Boolean(onPauseToggle) && hasPauseControls;
-  const canStop = Boolean(onStop);
   const canOpen = Boolean(onOpen) && !disableText;
-  const compactSpacingClass = compactTextOffset && !showPauseControl ? " -ml-4" : "";
+  const compactSpacingClass = compactTextOffset && !showPauseControl ? " ml-2" : "";
 
   return (
     <div
@@ -88,7 +89,7 @@ export function TaskInlineRow({
     >
       {showGrip ? <GripVertical className="mt-2 h-4 w-4 text-zinc-400" /> : <span className="w-4" />}
 
-      {(inProgress && canStop) || canTogglePause ? (
+      {canStop ? (
         <Button
           aria-label="Stop task"
           className="h-8 w-8 rounded-full border-orange-200 p-0 text-orange-700 hover:bg-orange-50"
@@ -144,11 +145,29 @@ export function TaskInlineRow({
           title={textActionTitle}
           type="button"
         >
-          {text}
+          <span className="block">
+            {sourceInstructionSetName ? (
+              <span className="mb-1 inline-flex max-w-full items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700">
+                <BookText className="h-3 w-3 shrink-0" />
+                <span className="truncate" title={sourceInstructionSetName}>
+                  {sourceInstructionSetName}
+                </span>
+              </span>
+            ) : null}
+            <span className={sourceInstructionSetName ? "ml-3" : ""}>{text}</span>
+          </span>
         </button>
       ) : (
         <div className={`min-w-0 break-words pt-1 text-left text-sm leading-relaxed text-zinc-900${compactSpacingClass}`}>
-          {text}
+          {sourceInstructionSetName ? (
+            <span className="mb-1 inline-flex max-w-full items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700">
+              <BookText className="h-3 w-3 shrink-0" />
+              <span className="truncate" title={sourceInstructionSetName}>
+                {sourceInstructionSetName}
+              </span>
+            </span>
+          ) : null}
+          <span className={sourceInstructionSetName ? "ml-3" : ""}>{text}</span>
         </div>
       )}
 

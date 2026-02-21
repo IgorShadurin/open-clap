@@ -4,7 +4,7 @@ import { Save, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
-import type { SettingRecord } from "../../shared/contracts";
+import type { CodexUsageApiResponse, SettingRecord } from "../../shared/contracts";
 import { requestJson } from "./app-dashboard-helpers";
 import { OpenClapHeader } from "./openclap-header";
 import { Button } from "./ui/button";
@@ -35,18 +35,6 @@ function isUsageConnectivitySetting(settingKey: string): boolean {
     settingKey === "codex_usage_proxy_enabled" ||
     settingKey === "codex_usage_proxy_url"
   );
-}
-
-interface CodexUsageApiResponse {
-  results: Array<{
-    authFile: string;
-    error?: string;
-    ok: boolean;
-    usage?: {
-      fiveHourUsedPercent: number;
-      weeklyUsedPercent: number | null;
-    };
-  }>;
 }
 
 interface SettingPresentation {

@@ -12,7 +12,12 @@ import {
   preventControlDragStart,
   stopDragPropagation,
 } from "../lib/drag-drop";
-import { TASK_MODEL_OPTIONS, TASK_REASONING_OPTIONS } from "@/lib/task-reasoning";
+import {
+  DEFAULT_TASK_MODEL,
+  DEFAULT_TASK_REASONING,
+  TASK_MODEL_OPTIONS,
+  TASK_REASONING_OPTIONS,
+} from "@/lib/task-reasoning";
 import { requestJson } from "./app-dashboard-helpers";
 import { OpenClapHeader } from "./openclap-header";
 import { TaskDeleteConfirmationDialog } from "./task-delete-confirmation-dialog";
@@ -71,6 +76,10 @@ export function InstructionSetPage({ instructionSetId }: InstructionSetPageProps
   const [editSetDescription, setEditSetDescription] = useState("");
   const [editSetSubmitting, setEditSetSubmitting] = useState(false);
   const [editSetImageFile, setEditSetImageFile] = useState<File | null>(null);
+  const [instructionSetCatalog, setInstructionSetCatalog] = useState<InstructionSetEntity[]>([]);
+  const [editSetLinkedInstructionSetIds, setEditSetLinkedInstructionSetIds] = useState<string[]>(
+    [],
+  );
   const [imageLoadError, setImageLoadError] = useState(false);
   const [imageCacheBust, setImageCacheBust] = useState(0);
   const editSetImageInputRef = useRef<HTMLInputElement | null>(null);
@@ -101,14 +110,51 @@ export function InstructionSetPage({ instructionSetId }: InstructionSetPageProps
     void loadSet();
   }, [loadSet]);
 
+  const loadInstructionSetCatalog = useCallback(async () => {
+    try {
+      const result = await requestJson<InstructionSetEntity[]>("/api/instructions");
+      setInstructionSetCatalog(result);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to load instruction sets");
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadInstructionSetCatalog();
+  }, [loadInstructionSetCatalog]);
+
   useRealtimeSync(() => {
     void loadSet({ silent: true });
+    void loadInstructionSetCatalog();
   });
 
   const imageSrc = useMemo(
     () => `/api/instructions/${instructionSetId}/image?v=${encodeURIComponent(`${setData?.updatedAt ?? "na"}:${imageCacheBust}`)}`,
     [imageCacheBust, instructionSetId, setData?.updatedAt],
   );
+
+  const availableInstructionSetsForLinking = useMemo(
+    () =>
+      instructionSetCatalog.filter((item) => item.id !== setData?.id).sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+      ),
+    [instructionSetCatalog, setData?.id],
+  );
+
+  const linkedInstructionSetNames = useMemo(() => {
+    if (!setData) {
+      return "";
+    }
+
+    const instructionSetNameById = new Map(
+      instructionSetCatalog.map((item) => [item.id, item.name]),
+    );
+    const names = setData.linkedInstructionSetIds
+      .map((id) => instructionSetNameById.get(id))
+      .filter((name): name is string => Boolean(name && name.trim().length > 0));
+
+    return names.length > 0 ? names.join(", ") : "";
+  }, [instructionSetCatalog, setData]);
 
   const openTaskEdit = (task: InstructionTaskEntity) => {
     setEditTaskTarget(task);
@@ -129,9 +175,9 @@ export function InstructionSetPage({ instructionSetId }: InstructionSetPageProps
       await requestJson(`/api/instructions/tasks/${editTaskTarget.id}`, {
         body: JSON.stringify({
           includePreviousContext: editTaskIncludeContext,
-          model: editTaskModel,
+          model: editTaskModel.trim() || DEFAULT_TASK_MODEL,
           previousContextMessages: editTaskIncludeContext ? Math.max(0, editTaskContextCount) : 0,
-          reasoning: editTaskReasoning,
+          reasoning: editTaskReasoning.trim() || DEFAULT_TASK_REASONING,
           text: editTaskText.trim(),
         }),
         headers: { "Content-Type": "application/json" },
@@ -222,10 +268,21 @@ export function InstructionSetPage({ instructionSetId }: InstructionSetPageProps
     setEditSetName(setData.name);
     setEditSetDescription(setData.description ?? "");
     setEditSetImageFile(null);
+    setEditSetLinkedInstructionSetIds(Array.from(new Set(setData.linkedInstructionSetIds)));
     if (editSetImageInputRef.current) {
       editSetImageInputRef.current.value = "";
     }
     setEditSetOpen(true);
+  };
+
+  const toggleEditSetLinkedInstructionSet = (instructionSetId: string, checked: boolean) => {
+    setEditSetLinkedInstructionSetIds((current) => {
+      const next = new Set(current.filter((item) => item !== instructionSetId));
+      if (checked) {
+        next.add(instructionSetId);
+      }
+      return Array.from(next);
+    });
   };
 
   const saveSetEdit = async () => {
@@ -238,6 +295,7 @@ export function InstructionSetPage({ instructionSetId }: InstructionSetPageProps
       await requestJson(`/api/instructions/${setData.id}`, {
         body: JSON.stringify({
           description: editSetDescription.trim() || null,
+          linkedInstructionSetIds: editSetLinkedInstructionSetIds,
           name: editSetName.trim(),
         }),
         headers: { "Content-Type": "application/json" },
@@ -342,6 +400,11 @@ export function InstructionSetPage({ instructionSetId }: InstructionSetPageProps
                     <div className="truncate text-2xl">{setData.name}</div>
                     {setData.description ? (
                       <div className="text-sm text-zinc-600">{setData.description}</div>
+                    ) : null}
+                    {linkedInstructionSetNames ? (
+                      <div className="mt-1 text-xs text-zinc-500">
+                        Links: {linkedInstructionSetNames}
+                      </div>
                     ) : null}
                   </div>
                 </div>
@@ -521,6 +584,39 @@ export function InstructionSetPage({ instructionSetId }: InstructionSetPageProps
                   placeholder="Description"
                   value={editSetDescription}
                 />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-zinc-700">Linked instruction sets</label>
+                <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-black/10 bg-zinc-50/60 p-3">
+                  {availableInstructionSetsForLinking.length < 1 ? (
+                    <div className="text-sm text-zinc-600">
+                      No other instruction sets available.
+                    </div>
+                  ) : (
+                    availableInstructionSetsForLinking.map((instructionSet) => {
+                      const isLinked = editSetLinkedInstructionSetIds.includes(instructionSet.id);
+                      return (
+                        <label
+                          className="flex items-center gap-2 rounded-md px-1 py-1 text-sm"
+                          key={instructionSet.id}
+                        >
+                          <Checkbox
+                            checked={isLinked}
+                            onCheckedChange={(checked) =>
+                              toggleEditSetLinkedInstructionSet(
+                                instructionSet.id,
+                                Boolean(checked),
+                              )
+                            }
+                          />
+                          <span className="truncate" title={instructionSet.name}>
+                            {instructionSet.name}
+                          </span>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
               </div>
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-zinc-700">Image</label>

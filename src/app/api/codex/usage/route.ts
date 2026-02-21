@@ -3,7 +3,12 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import type { Prisma } from "@prisma/client";
 
-import type { ApiErrorShape } from "../../../../../shared/contracts";
+import type {
+  ApiErrorShape,
+  CodexUsageApiResponse,
+  CodexUsageApiResult,
+} from "../../../../../shared/contracts";
+import type { CodexUsageModelSummary, CodexUsagePayload } from "../../../../lib/codex-usage";
 import { createApiError } from "../../../../lib/api-error";
 import * as codexUsage from "../../../../lib/codex-usage";
 import { prisma } from "../../../../lib/prisma";
@@ -21,29 +26,8 @@ interface CodexUsageRequestBody {
   timeoutMs?: number;
 }
 
-interface CodexUsageResultItem {
-  authFile: string;
-  endpoint?: string;
-  error?: string;
-  ok: boolean;
-  refreshedToken?: boolean;
-  usage?: {
-    accountId?: string;
-    allowed: boolean;
-    fiveHourResetAt: string;
-    fiveHourUsedPercent: number;
-    planType?: string;
-    weeklyResetAt: string;
-    weeklyUsedPercent: number | null;
-  };
-}
-
-interface CodexUsageResponseBody {
-  results: CodexUsageResultItem[];
-}
-
 interface CodexUsageCachePayload {
-  results?: CodexUsageResultItem[];
+  results?: CodexUsageApiResult[];
 }
 
 function normalizeAuthFiles(body: CodexUsageRequestBody): string[] {
@@ -76,7 +60,7 @@ function buildCacheKey(input: {
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
-function parseCachedPayload(input: Prisma.JsonValue): CodexUsageResponseBody | null {
+function parseCachedPayload(input: Prisma.JsonValue): CodexUsageApiResponse | null {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     return null;
   }
@@ -86,8 +70,34 @@ function parseCachedPayload(input: Prisma.JsonValue): CodexUsageResponseBody | n
     return null;
   }
 
+  return payload;
+}
+
+function buildLegacyUsageFromRateLimit(
+  usage: CodexUsagePayload,
+  primaryModelUsage: CodexUsageModelSummary | undefined,
+) {
+  const primaryWindow = usage.rate_limit?.primary_window;
+  const secondaryWindow = usage.rate_limit?.secondary_window;
+
   return {
-    results: payload.results,
+    accountId: usage.account_id,
+    allowed: Boolean(usage.rate_limit?.allowed),
+    fiveHourResetAt: codexUsage.formatUsageReset(primaryWindow?.reset_at),
+    fiveHourUsedPercent: primaryWindow?.used_percent ?? 0,
+    planType: usage.plan_type,
+    weeklyResetAt: codexUsage.formatUsageReset(secondaryWindow?.reset_at),
+    weeklyUsedPercent: secondaryWindow?.used_percent ?? null,
+    ...(primaryModelUsage
+      ? {
+          allowed: primaryModelUsage.allowed,
+          fiveHourResetAt: primaryModelUsage.fiveHourResetAt,
+          fiveHourUsedPercent: primaryModelUsage.fiveHourUsedPercent,
+          weeklyResetAt: primaryModelUsage.weeklyResetAt,
+          weeklyUsedPercent: primaryModelUsage.weeklyUsedPercent,
+          planType: primaryModelUsage.planType ?? usage.plan_type,
+        }
+      : {}),
   };
 }
 
@@ -185,12 +195,12 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (cached && cached.expiresAt.getTime() > Date.now()) {
       const payload = parseCachedPayload(cached.payload as Prisma.JsonValue);
       if (payload) {
-        return NextResponse.json<CodexUsageResponseBody>(payload, { status: 200 });
+        return NextResponse.json<CodexUsageApiResponse>(payload, { status: 200 });
       }
     }
   }
 
-  const results: CodexUsageResultItem[] = [];
+  const results: CodexUsageApiResult[] = [];
   for (const authFilePath of resolvedAuthFiles) {
     try {
       const result = await codexUsage.fetchCodexUsageForAuthFile({
@@ -199,8 +209,8 @@ export async function POST(request: Request): Promise<NextResponse> {
         proxyUrl: proxy.length > 0 ? proxy : undefined,
         timeoutMs,
       });
-      const primary = result.usage.rate_limit?.primary_window;
-      const secondary = result.usage.rate_limit?.secondary_window;
+      const modelSummaries = codexUsage.extractCodexUsageModelSummaries(result.usage);
+      const primaryModelUsage = modelSummaries[0];
 
       results.push({
         authFile: result.absoluteAuthFilePath,
@@ -208,14 +218,8 @@ export async function POST(request: Request): Promise<NextResponse> {
         ok: true,
         refreshedToken: result.refreshedToken,
         usage: {
-          accountId: result.usage.account_id,
-          allowed: Boolean(result.usage.rate_limit?.allowed),
-          fiveHourResetAt: codexUsage.formatUsageReset(primary?.reset_at),
-          fiveHourUsedPercent: primary?.used_percent ?? 0,
-          planType: result.usage.plan_type,
-          weeklyResetAt: codexUsage.formatUsageReset(secondary?.reset_at),
-          weeklyUsedPercent:
-            secondary?.used_percent === undefined ? null : secondary.used_percent,
+          ...(modelSummaries.length > 0 ? { models: modelSummaries } : {}),
+          ...buildLegacyUsageFromRateLimit(result.usage, primaryModelUsage),
         },
       });
     } catch (error) {
@@ -227,7 +231,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
   }
 
-  const responseBody: CodexUsageResponseBody = { results };
+  const responseBody: CodexUsageApiResponse = { results };
 
   if (results.some((item) => item.ok)) {
     const now = Date.now();
@@ -255,5 +259,5 @@ export async function POST(request: Request): Promise<NextResponse> {
     ]);
   }
 
-  return NextResponse.json<CodexUsageResponseBody>(responseBody, { status: 200 });
+  return NextResponse.json<CodexUsageApiResponse>(responseBody, { status: 200 });
 }

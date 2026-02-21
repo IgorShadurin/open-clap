@@ -2,7 +2,7 @@
 
 import { Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { DragEvent, KeyboardEvent } from "react";
+import type { DragEvent, KeyboardEvent, ReactNode } from "react";
 
 import {
   extractDroppedImagePaths,
@@ -37,9 +37,13 @@ export interface TaskQuickAddPayload {
 }
 
 interface TaskQuickAddProps {
+  allowEmptyText?: boolean;
   onSubmit: (payload: TaskQuickAddPayload) => Promise<void> | void;
+  clearInputSignal?: number;
+  disableTextInput?: boolean;
   placeholder: string;
   projectId: string;
+  rightAddon?: ReactNode;
   stopPropagation?: boolean;
   submitAriaLabel: string;
   submitTitle: string;
@@ -51,9 +55,13 @@ const IMAGE_FILE_NAME_PATTERN =
 type BrowserDroppedFile = File & { path?: string; webkitRelativePath?: string };
 
 export function TaskQuickAdd({
+  allowEmptyText = false,
   onSubmit,
+  clearInputSignal,
+  disableTextInput = false,
   placeholder,
   projectId,
+  rightAddon,
   stopPropagation = false,
   submitAriaLabel,
   submitTitle,
@@ -136,6 +144,13 @@ export function TaskQuickAdd({
       reasoning,
     });
   }, [contextCount, includeContext, model, preferencesLoadedProjectId, projectId, reasoning]);
+
+  useEffect(() => {
+    if (typeof clearInputSignal !== "number") {
+      return;
+    }
+    reset();
+  }, [clearInputSignal]);
 
   const reset = () => {
     setText("");
@@ -258,6 +273,9 @@ export function TaskQuickAdd({
   };
 
   const handleFileDragEnter = (event: DragEvent<HTMLFormElement>) => {
+    if (disableTextInput) {
+      return;
+    }
     if (!hasImagePathDataTransfer(event.dataTransfer)) {
       return;
     }
@@ -268,6 +286,9 @@ export function TaskQuickAdd({
   };
 
   const handleFileDragLeave = (event: DragEvent<HTMLFormElement>) => {
+    if (disableTextInput) {
+      return;
+    }
     if (!hasImagePathDataTransfer(event.dataTransfer)) {
       return;
     }
@@ -280,6 +301,9 @@ export function TaskQuickAdd({
   };
 
   const handleFileDragOver = (event: DragEvent<HTMLFormElement>) => {
+    if (disableTextInput) {
+      return;
+    }
     if (!hasImagePathDataTransfer(event.dataTransfer)) {
       return;
     }
@@ -290,6 +314,9 @@ export function TaskQuickAdd({
   };
 
   const handleFileDrop = async (event: DragEvent<HTMLFormElement>) => {
+    if (disableTextInput) {
+      return;
+    }
     stopFileDropEvent(event);
     fileDropDepthRef.current = 0;
     setFileDropActive(false);
@@ -361,7 +388,7 @@ export function TaskQuickAdd({
 
   const handleSubmit = async () => {
     const trimmedText = text.trim();
-    if (trimmedText.length < 1 || submitting) {
+    if (submitting || (!allowEmptyText && trimmedText.length < 1)) {
       return;
     }
 
@@ -381,6 +408,9 @@ export function TaskQuickAdd({
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (disableTextInput) {
+      return;
+    }
     if (event.key !== "Tab" || event.shiftKey) {
       return;
     }
@@ -425,6 +455,7 @@ export function TaskQuickAdd({
             "h-9 text-sm",
             fileDropReady ? "border-emerald-400 bg-emerald-50 ring-1 ring-emerald-200" : undefined,
           )}
+          disabled={disableTextInput}
           data-task-file-drop="true"
           onChange={(event) => setText(event.target.value)}
           onFocus={() => setSettingsExpanded(true)}
@@ -433,10 +464,11 @@ export function TaskQuickAdd({
           ref={inputRef}
           value={text}
         />
+        {rightAddon}
         <Button
           aria-label={submitAriaLabel}
           className="h-9 w-9 shrink-0 p-0"
-          disabled={submitting || text.trim().length < 1}
+          disabled={submitting || (!allowEmptyText && text.trim().length < 1)}
           draggable={false}
           onDragStart={preventDragStart}
           onMouseDown={stopEventPropagation}

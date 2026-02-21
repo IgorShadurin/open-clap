@@ -24,7 +24,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -33,7 +33,16 @@ import {
   TASK_MODEL_OPTIONS,
   TASK_REASONING_OPTIONS,
 } from "@/lib/task-reasoning";
+import type {
+  CodexUsageApiResponse,
+  CodexUsageModelSummary,
+} from "../../shared/contracts";
 import { clearTaskFormPreferences } from "@/lib/task-form-preferences";
+import {
+  buildMetadataForResolvedInstructionTask,
+  parseInstructionTaskMetadata,
+  resolveInstructionSetTasks,
+} from "@/lib/instruction-set-links";
 import {
   createDraggableContainerHandlers,
   moveItemInList,
@@ -42,6 +51,7 @@ import {
 } from "../lib/drag-drop";
 
 import type {
+  InstructionSetTreeItem,
   ProjectEntity,
   SubprojectEntity,
   TaskEntity,
@@ -60,6 +70,7 @@ import { TaskInlineRow } from "./task-inline-row";
 import { TaskQuickAdd, type TaskQuickAddPayload } from "./task-quick-add";
 import { usePreventUnhandledFileDrop } from "./use-prevent-unhandled-file-drop";
 import { useRealtimeSync } from "./use-realtime-sync";
+import { TaskDeleteConfirmationDialog } from "./task-delete-confirmation-dialog";
 import { Checkbox } from "./ui/checkbox";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -84,23 +95,8 @@ type ProjectTree = ProjectEntity & {
 const CODEX_USAGE_POLL_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_CODEX_AUTH_FILE = "~/.codex/auth.json";
 
-interface CodexUsageApiResponse {
-  results: Array<{
-    authFile: string;
-    endpoint?: string;
-    error?: string;
-    ok: boolean;
-    refreshedToken?: boolean;
-    usage?: {
-      accountId?: string;
-      allowed: boolean;
-      fiveHourResetAt: string;
-      fiveHourUsedPercent: number;
-      planType?: string;
-      weeklyResetAt: string;
-      weeklyUsedPercent: number | null;
-    };
-  }>;
+interface CodexUsageModelDisplay extends CodexUsageModelSummary {
+  displayLabel: string;
 }
 
 function normalizePercent(percent: number): number {
@@ -122,6 +118,23 @@ function limitProgressClass(percent: number): string {
   }
 
   return "bg-zinc-700";
+}
+
+function resolveCodexModelLabel(model: string): string {
+  if (model === "default") {
+    return "Classic";
+  }
+
+  if (model === DEFAULT_TASK_MODEL) {
+    return "Classic";
+  }
+
+  const option = TASK_MODEL_OPTIONS.find((item) => item.value === model);
+  if (option) {
+    return option.label;
+  }
+
+  return model;
 }
 
 interface LimitResetLabel {
@@ -212,6 +225,10 @@ function findTaskInProjects(projects: ProjectTree[], taskId: string): TaskEntity
   return null;
 }
 
+function getTaskComposerScopeKey(projectId: string, subprojectId?: string | null): string {
+  return subprojectId ? `${projectId}:subproject:${subprojectId}` : `${projectId}:project`;
+}
+
 function isProjectTasksVisibleOnMainPage(project: ProjectTree): boolean {
   return project.mainPageTasksVisible;
 }
@@ -229,8 +246,15 @@ export function MainProjectsPage() {
 
   const [projects, setProjects] = useState<ProjectTree[]>([]);
   const [loading, setLoading] = useState(true);
+  const [instructionSets, setInstructionSets] = useState<InstructionSetTreeItem[]>([]);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [selectedInstructionSetByComposer, setSelectedInstructionSetByComposer] = useState<
+    Record<string, string>
+  >({});
+  const [quickAddClearSignalByScope, setQuickAddClearSignalByScope] = useState<Record<string, number>>(
+    {},
+  );
   const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null);
   const [draggingSubproject, setDraggingSubproject] = useState<{
     projectId: string;
@@ -296,9 +320,12 @@ export function MainProjectsPage() {
   );
   const [codexFiveHourResetAt, setCodexFiveHourResetAt] = useState<string | null>(null);
   const [codexWeeklyResetAt, setCodexWeeklyResetAt] = useState<string | null>(null);
+  const [codexUsageModelSummaries, setCodexUsageModelSummaries] = useState<
+    CodexUsageModelDisplay[]
+  >([]);
   const [codexUsageEndpoint, setCodexUsageEndpoint] = useState<string | null>(null);
   const [codexUsageCheckedAt, setCodexUsageCheckedAt] = useState<string | null>(null);
-  const [codexInfoOpen, setCodexInfoOpen] = useState(false);
+  const [codexInfoOpenModel, setCodexInfoOpenModel] = useState<string | null>(null);
   const [projectIconLoadErrors, setProjectIconLoadErrors] = useState<Record<string, boolean>>(
     {},
   );
@@ -306,7 +333,105 @@ export function MainProjectsPage() {
     Record<string, number>
   >({});
   const projectIconInputRef = useRef<HTMLInputElement | null>(null);
-  const codexInfoRef = useRef<HTMLDivElement | null>(null);
+  const codexInfoOpenCardModel = "legacy-single";
+
+  const sortedInstructionSets = useMemo(
+    () =>
+      [...instructionSets].sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+      ),
+    [instructionSets],
+  );
+
+  const getComposerInstructionSetId = (scopeKey: string): string =>
+    selectedInstructionSetByComposer[scopeKey] ?? "";
+
+  const setComposerInstructionSet = (scopeKey: string, instructionSetId: string) => {
+    setSelectedInstructionSetByComposer((current) => ({
+      ...current,
+      [scopeKey]: instructionSetId,
+    }));
+    setQuickAddClearSignalByScope((current) => ({
+      ...current,
+      [scopeKey]: (current[scopeKey] ?? 0) + 1,
+    }));
+  };
+
+  const getTaskSourceLabel = (task: TaskEntity): string | undefined => {
+    const sourceMetadata = parseInstructionTaskMetadata(task.metadata);
+    return sourceMetadata?.instructionSetName;
+  };
+
+  const isInstructionSetAddedToProject = (project: ProjectTree, instructionSetId: string): boolean => {
+    const normalizedInstructionSetId = instructionSetId.trim();
+    if (!normalizedInstructionSetId) {
+      return false;
+    }
+
+    const allTasks = project.tasks.concat(
+      project.subprojects.flatMap((subproject) => subproject.tasks),
+    );
+    return allTasks.some((task) => {
+      const metadata = parseInstructionTaskMetadata(task.metadata);
+      return metadata?.instructionSetId === normalizedInstructionSetId;
+    });
+  };
+
+  const renderTaskComposerInstructionAddon = (scopeKey: string) => {
+    const selectedInstructionSetId = getComposerInstructionSetId(scopeKey);
+
+    return (
+      <Select
+        className="h-9 w-52 shrink-0 text-sm"
+        onChange={(event) => setComposerInstructionSet(scopeKey, event.target.value)}
+        value={selectedInstructionSetId}
+      >
+        <option value="">Custom task</option>
+        {sortedInstructionSets.length < 1 ? null : (
+          <>
+            <option disabled value="">
+              --------------------
+            </option>
+            {sortedInstructionSets.map((instructionSet) => (
+              <option key={instructionSet.id} value={instructionSet.id}>
+                {instructionSet.name}
+              </option>
+            ))}
+          </>
+        )}
+      </Select>
+    );
+  };
+
+  const renderTaskComposer = (
+    project: ProjectTree,
+    scopeKey: string,
+    options: {
+      placeholder: string;
+      submitAriaLabel: string;
+      submitTitle: string;
+    },
+    onSubmit: (payload: TaskQuickAddPayload, instructionSetId: string) => Promise<void> | void,
+  ) => {
+    const selectedInstructionSetId = getComposerInstructionSetId(scopeKey);
+
+    return (
+      <TaskQuickAdd
+        allowEmptyText={Boolean(selectedInstructionSetId)}
+        clearInputSignal={quickAddClearSignalByScope[scopeKey]}
+        disableTextInput={Boolean(selectedInstructionSetId)}
+        onSubmit={(payload) =>
+          onSubmit(payload, selectedInstructionSetId)
+        }
+        placeholder={options.placeholder}
+        projectId={project.id}
+        rightAddon={renderTaskComposerInstructionAddon(scopeKey)}
+        stopPropagation
+        submitAriaLabel={options.submitAriaLabel}
+        submitTitle={options.submitTitle}
+      />
+    );
+  };
 
   const shouldBlockContainerDragStart = (event: {
     target: EventTarget | null;
@@ -335,7 +460,9 @@ export function MainProjectsPage() {
     }
 
     try {
-      const tree = await requestJson<ProjectTree[]>("/api/projects/tree");
+      const tree = await requestJson<ProjectTree[]>("/api/projects/tree", {
+        cache: "no-store",
+      });
       setProjects(tree);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to load projects");
@@ -344,6 +471,17 @@ export function MainProjectsPage() {
         setLoading(false);
       }
       setHasLoadedOnce(true);
+    }
+  }, []);
+
+  const loadInstructionSets = useCallback(async () => {
+    try {
+      const result = await requestJson<InstructionSetTreeItem[]>("/api/instructions", {
+        cache: "no-store",
+      });
+      setInstructionSets(result);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to load instruction sets");
     }
   }, []);
 
@@ -368,19 +506,30 @@ export function MainProjectsPage() {
       if (!result.ok || !result.usage) {
         const rawError = result.error?.trim() ?? "Unknown usage API error";
         const compactError = rawError.replace(/\s+/g, " ").slice(0, 220);
-        setCodexConnected(false);
-        setCodexConnectionError(compactError);
-        setCodexWeeklyLimitUsedPercent(0);
-        setCodexFiveHourLimitUsedPercent(0);
-        setCodexFiveHourResetAt(null);
-        setCodexWeeklyResetAt(null);
-        setCodexUsageEndpoint(null);
+      setCodexConnected(false);
+      setCodexConnectionError(compactError);
+      setCodexUsageModelSummaries([]);
+      setCodexWeeklyLimitUsedPercent(0);
+      setCodexFiveHourLimitUsedPercent(0);
+      setCodexFiveHourResetAt(null);
+      setCodexWeeklyResetAt(null);
+      setCodexUsageEndpoint(null);
         setCodexUsageCheckedAt(new Date().toISOString());
         return;
       }
 
       setCodexConnected(true);
       setCodexConnectionError(null);
+      setCodexUsageModelSummaries(
+        (result.usage.models ?? [])
+          .map((model) => ({
+            ...model,
+            displayLabel: model.modelLabel ?? resolveCodexModelLabel(model.model),
+          }))
+          .sort((first, second) =>
+            resolveModelCardSortRank(first.model) - resolveModelCardSortRank(second.model),
+          ),
+      );
       setCodexWeeklyLimitUsedPercent(result.usage.weeklyUsedPercent ?? 0);
       setCodexFiveHourLimitUsedPercent(result.usage.fiveHourUsedPercent);
       setCodexFiveHourResetAt(result.usage.fiveHourResetAt ?? null);
@@ -393,6 +542,7 @@ export function MainProjectsPage() {
         .slice(0, 220);
       setCodexConnected(false);
       setCodexConnectionError(message);
+      setCodexUsageModelSummaries([]);
       setCodexWeeklyLimitUsedPercent(0);
       setCodexFiveHourLimitUsedPercent(0);
       setCodexFiveHourResetAt(null);
@@ -409,6 +559,10 @@ export function MainProjectsPage() {
   }, [loadProjects]);
 
   useEffect(() => {
+    void loadInstructionSets();
+  }, [loadInstructionSets]);
+
+  useEffect(() => {
     void loadCodexUsage();
 
     const intervalId = window.setInterval(() => {
@@ -422,6 +576,7 @@ export function MainProjectsPage() {
 
   useRealtimeSync(() => {
     void loadProjects({ silent: true });
+    void loadInstructionSets();
   });
 
   useEffect(() => {
@@ -490,7 +645,7 @@ export function MainProjectsPage() {
   }, [openProjectIconMenuId, openProjectMenuId, projects]);
 
   useEffect(() => {
-    if (!codexInfoOpen) {
+    if (!codexInfoOpenModel) {
       return;
     }
 
@@ -499,16 +654,19 @@ export function MainProjectsPage() {
         return;
       }
 
-      if (codexInfoRef.current?.contains(event.target)) {
+      if (
+        event.target instanceof Element &&
+        event.target.closest("[data-codex-usage-info-card]")
+      ) {
         return;
       }
 
-      setCodexInfoOpen(false);
+      setCodexInfoOpenModel(null);
     };
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setCodexInfoOpen(false);
+        setCodexInfoOpenModel(null);
       }
     };
 
@@ -519,7 +677,11 @@ export function MainProjectsPage() {
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [codexInfoOpen]);
+  }, [codexInfoOpenModel]);
+
+  const isCodexInfoOpen = (model: string): boolean => codexInfoOpenModel === model;
+  const toggleCodexInfo = (model: string) =>
+    setCodexInfoOpenModel((current) => (current === model ? null : model));
 
   const handleQuickProjectCreate = async (payload: ProjectQuickAddPayload) => {
     try {
@@ -834,7 +996,62 @@ export function MainProjectsPage() {
     project: ProjectTree,
     payload: TaskQuickAddPayload,
     subprojectId: string | null = null,
+    sourceInstructionSetId: string = "",
   ) => {
+    const trimmedSourceInstructionSetId = sourceInstructionSetId.trim();
+    const selectedInstructionSet = instructionSets.find(
+      (instructionSet) => instructionSet.id === trimmedSourceInstructionSetId,
+    );
+
+    if (trimmedSourceInstructionSetId.length > 0) {
+      const resolvedTasks = resolveInstructionSetTasks(instructionSets, trimmedSourceInstructionSetId);
+      if (resolvedTasks.length < 1) {
+        setErrorMessage("Selected instruction set has no tasks to add.");
+        return;
+      }
+      if (isInstructionSetAddedToProject(project, trimmedSourceInstructionSetId)) {
+        setErrorMessage("Instruction set already added to this project");
+        return;
+      }
+
+      try {
+        let isFirstResolvedTask = true;
+        for (const resolvedTask of resolvedTasks) {
+          const sourceInstructionSetName = selectedInstructionSet?.name?.trim() || resolvedTask.sourceInstructionSetName;
+          const payloadMetadata = buildMetadataForResolvedInstructionTask({
+            composerInstructionSetId: trimmedSourceInstructionSetId,
+            composerInstructionSetName: sourceInstructionSetName,
+            resolvedTask,
+          });
+          await requestJson("/api/tasks", {
+            body: JSON.stringify({
+              includePreviousContext: resolvedTask.includePreviousContext,
+              model: resolvedTask.model,
+              metadata: payloadMetadata,
+              skipInstructionSetDuplicateCheck: !isFirstResolvedTask,
+              previousContextMessages: resolvedTask.includePreviousContext
+                ? resolvedTask.previousContextMessages
+                : 0,
+              projectId: project.id,
+              reasoning: resolvedTask.reasoning,
+              subprojectId,
+              text: resolvedTask.text,
+            }),
+            headers: { "Content-Type": "application/json" },
+            method: "POST",
+          });
+          isFirstResolvedTask = false;
+        }
+
+        await loadProjects();
+        toast.success("Instruction set tasks added");
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : "Failed to add instruction set tasks");
+      }
+
+      return;
+    }
+
     try {
       await requestJson("/api/tasks", {
         body: JSON.stringify({
@@ -987,7 +1204,6 @@ export function MainProjectsPage() {
         method: "POST",
       });
       await loadProjects();
-      toast.success("Task priority updated");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to reorder tasks");
     } finally {
@@ -1106,14 +1322,44 @@ export function MainProjectsPage() {
       ? "bg-emerald-500"
       : "bg-red-500"
     : "bg-zinc-400";
-  const codexFiveHourLimitRemainingPercent = codexConnected
-    ? normalizePercent(100 - codexFiveHourLimitUsedPercent)
-    : 0;
-  const codexWeeklyLimitRemainingPercent = codexConnected
-    ? normalizePercent(100 - codexWeeklyLimitUsedPercent)
-    : 0;
   const fiveHourResetLabel = formatLimitReset(codexFiveHourResetAt);
   const weeklyResetLabel = formatLimitReset(codexWeeklyResetAt);
+  const showPerModelLimits = codexUsageModelSummaries.length > 1;
+  const resolveModelCardSortRank = (model: string): number => {
+    if (model === "default") {
+      return 0;
+    }
+    if (model === DEFAULT_TASK_MODEL) {
+      return 0;
+    }
+    if (model.toLowerCase().includes("spark")) {
+      return 1;
+    }
+    return 2;
+  };
+
+  const renderUsageLimits = (label: string, usedPercent: number, resetLabel: LimitResetLabel) => {
+    const remainingPercent = codexConnected ? normalizePercent(100 - usedPercent) : 0;
+
+    return (
+      <div className="space-y-1">
+        <div className="flex items-center justify-between text-sm font-medium text-zinc-700">
+          <span>{label}</span>
+          <span>{remainingPercent}%</span>
+        </div>
+        <div className="h-2 overflow-hidden rounded bg-zinc-200">
+          <div
+            className={`h-full ${limitProgressClass(remainingPercent)}`}
+            style={{ width: progressWidth(remainingPercent) }}
+          />
+        </div>
+        <div className="text-[11px] text-zinc-500">
+          {resetLabel.text}{" "}
+          {resetLabel.suffix ? <span className="font-semibold">{resetLabel.suffix}</span> : null}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-zinc-100 p-4 md:p-8">
@@ -1127,79 +1373,102 @@ export function MainProjectsPage() {
             OpenClap
           </Link>
           <div className="flex flex-wrap items-start justify-between gap-2">
-            <div className="relative w-[320px] space-y-3 rounded-md border border-black/10 bg-white/70 p-4">
-              <div className="absolute right-3 top-3" ref={codexInfoRef}>
-                <button
-                  aria-label="Codex limits details"
-                  className="text-zinc-500 transition-colors hover:text-zinc-800"
-                  onClick={() => setCodexInfoOpen((state) => !state)}
-                  title={codexConnectionInfo}
-                  type="button"
-                >
-                  <Info className="h-4 w-4" />
-                </button>
-                {codexInfoOpen ? (
-                  <div className="absolute right-0 z-30 mt-2 w-[300px] space-y-1 rounded-md border border-black/10 bg-white p-3 text-xs text-zinc-700 shadow-lg">
-                    <div>Auth file: {codexResolvedAuthFilePath}</div>
-                    <div>Endpoint: {codexUsageEndpoint ?? "n/a"}</div>
-                    <div>
-                      Checked:{" "}
-                      {codexUsageCheckedAt
-                        ? new Date(codexUsageCheckedAt).toLocaleString()
-                        : "n/a"}
+            {showPerModelLimits ? (
+              <div className="flex flex-wrap gap-3">
+                {codexUsageModelSummaries.map((summary) => (
+                  <div
+                    key={summary.model}
+                    data-codex-usage-info-card
+                    className="relative w-[320px] space-y-3 rounded-md border border-black/10 bg-white/70 p-4"
+                  >
+                    <div className="absolute right-3 top-3">
+                      <button
+                        aria-label={`Codex limits details (${summary.displayLabel})`}
+                        className="text-zinc-500 transition-colors hover:text-zinc-800"
+                        onClick={() => toggleCodexInfo(summary.model)}
+                        title={codexConnectionInfo}
+                        type="button"
+                      >
+                        <Info className="h-4 w-4" />
+                      </button>
+                      {isCodexInfoOpen(summary.model) ? (
+                        <div className="absolute right-0 z-30 mt-2 w-[300px] space-y-1 rounded-md border border-black/10 bg-white p-3 text-xs text-zinc-700 shadow-lg">
+                          <div>Auth file: {codexResolvedAuthFilePath}</div>
+                          <div>Endpoint: {codexUsageEndpoint ?? "n/a"}</div>
+                          <div>
+                            Checked:{" "}
+                            {codexUsageCheckedAt
+                              ? new Date(codexUsageCheckedAt).toLocaleString()
+                              : "n/a"}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
+                    <div className="flex items-center text-sm font-medium">
+                      <div className="flex items-center gap-2">
+                        <span
+                          aria-label={codexConnectionStateLabel}
+                          title={codexConnectionStateTitle}
+                          className={`h-2.5 w-2.5 rounded-full ${codexConnectionDotClass}`}
+                        />
+                        <span>{summary.displayLabel}</span>
+                      </div>
+                    </div>
+                    {renderUsageLimits(
+                      "5h limit",
+                      summary.fiveHourUsedPercent,
+                      formatLimitReset(summary.fiveHourResetAt),
+                    )}
+                    {renderUsageLimits(
+                      "Weekly limit",
+                      summary.weeklyUsedPercent ?? 0,
+                      formatLimitReset(summary.weeklyResetAt),
+                    )}
                   </div>
-                ) : null}
+                ))}
               </div>
-              <div className="flex items-center text-sm font-medium">
-                <div className="flex items-center gap-2">
-                  <span
-                    aria-label={codexConnectionStateLabel}
-                    title={codexConnectionStateTitle}
-                    className={`h-2.5 w-2.5 rounded-full ${codexConnectionDotClass}`}
-                  />
-                  <span>Codex connection</span>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <div className="flex items-center justify-between text-sm font-medium text-zinc-700">
-                  <span>5h limit</span>
-                  <span>{codexFiveHourLimitRemainingPercent}%</span>
-                </div>
-                <div className="h-2 overflow-hidden rounded bg-zinc-200">
-                  <div
-                    className={`h-full ${limitProgressClass(codexFiveHourLimitRemainingPercent)}`}
-                    style={{ width: progressWidth(codexFiveHourLimitRemainingPercent) }}
-                  />
-                </div>
-                <div className="text-[11px] text-zinc-500">
-                  {fiveHourResetLabel.text}{" "}
-                  {fiveHourResetLabel.suffix ? (
-                    <span className="font-semibold">{fiveHourResetLabel.suffix}</span>
+            ) : (
+              <div
+                className="relative w-[320px] space-y-3 rounded-md border border-black/10 bg-white/70 p-4"
+                data-codex-usage-info-card
+              >
+                <div className="absolute right-3 top-3">
+                  <button
+                    aria-label="Codex limits details"
+                    className="text-zinc-500 transition-colors hover:text-zinc-800"
+                    onClick={() => toggleCodexInfo(codexInfoOpenCardModel)}
+                    title={codexConnectionInfo}
+                    type="button"
+                  >
+                    <Info className="h-4 w-4" />
+                  </button>
+                  {isCodexInfoOpen(codexInfoOpenCardModel) ? (
+                    <div className="absolute right-0 z-30 mt-2 w-[300px] space-y-1 rounded-md border border-black/10 bg-white p-3 text-xs text-zinc-700 shadow-lg">
+                      <div>Auth file: {codexResolvedAuthFilePath}</div>
+                      <div>Endpoint: {codexUsageEndpoint ?? "n/a"}</div>
+                      <div>
+                        Checked:{" "}
+                        {codexUsageCheckedAt
+                          ? new Date(codexUsageCheckedAt).toLocaleString()
+                          : "n/a"}
+                      </div>
+                    </div>
                   ) : null}
                 </div>
+                <div className="flex items-center text-sm font-medium">
+                  <div className="flex items-center gap-2">
+                    <span
+                      aria-label={codexConnectionStateLabel}
+                      title={codexConnectionStateTitle}
+                      className={`h-2.5 w-2.5 rounded-full ${codexConnectionDotClass}`}
+                    />
+                    <span>Codex connection</span>
+                  </div>
+                </div>
+                {renderUsageLimits("5h limit", codexFiveHourLimitUsedPercent, fiveHourResetLabel)}
+                {renderUsageLimits("Weekly limit", codexWeeklyLimitUsedPercent, weeklyResetLabel)}
               </div>
-
-              <div className="space-y-1">
-                <div className="flex items-center justify-between text-sm font-medium text-zinc-700">
-                  <span>Weekly limit</span>
-                  <span>{codexWeeklyLimitRemainingPercent}%</span>
-                </div>
-                <div className="h-2 overflow-hidden rounded bg-zinc-200">
-                  <div
-                    className={`h-full ${limitProgressClass(codexWeeklyLimitRemainingPercent)}`}
-                    style={{ width: progressWidth(codexWeeklyLimitRemainingPercent) }}
-                  />
-                </div>
-                <div className="text-[11px] text-zinc-500">
-                  {weeklyResetLabel.text}{" "}
-                  {weeklyResetLabel.suffix ? (
-                    <span className="font-semibold">{weeklyResetLabel.suffix}</span>
-                  ) : null}
-                </div>
-              </div>
-            </div>
+            )}
             <div className="flex items-center gap-2">
               <Button asChild type="button" variant="outline">
                 <Link href="/instructions">
@@ -1858,16 +2127,22 @@ export function MainProjectsPage() {
 
                                 {subprojectTasksExpanded ? (
                                   <div className="space-y-2 border-t border-black/10 p-2">
-                                    <TaskQuickAdd
-                                      onSubmit={(payload) =>
-                                        handleQuickTaskCreate(project, payload, subproject.id)
-                                      }
-                                      placeholder={`Add task to ${subproject.name}`}
-                                      projectId={project.id}
-                                      stopPropagation
-                                      submitAriaLabel={`Add task to ${subproject.name}`}
-                                      submitTitle={`Add task to ${subproject.name}`}
-                                    />
+                                    {renderTaskComposer(
+                                      project,
+                                      getTaskComposerScopeKey(project.id, subproject.id),
+                                      {
+                                        placeholder: `Add task to ${subproject.name}`,
+                                        submitAriaLabel: `Add task to ${subproject.name}`,
+                                        submitTitle: `Add task to ${subproject.name}`,
+                                      },
+                                      (payload, selectedInstructionSetId) =>
+                                        handleQuickTaskCreate(
+                                          project,
+                                          payload,
+                                          subproject.id,
+                                          selectedInstructionSetId,
+                                        ),
+                                    )}
                                     {activeSubprojectTasks.length < 1 ? (
                                       <div className="rounded-md border border-dashed border-black/15 px-3 py-2 text-sm text-zinc-500">
                                         No active tasks in this subproject
@@ -1875,7 +2150,7 @@ export function MainProjectsPage() {
                                     ) : (
                                       activeSubprojectTasks.map((task) => {
                                         const taskLocked = !canEditTask(task);
-
+                                        const taskInProgress = task.status === "in_progress";
                                         return (
                                           <TaskInlineRow
                                             deleteAriaLabel={`Remove task ${task.text}`}
@@ -1889,6 +2164,7 @@ export function MainProjectsPage() {
                                             inProgress={task.status === "in_progress"}
                                             key={task.id}
                                             locked={taskLocked}
+                                            sourceInstructionSetName={getTaskSourceLabel(task)}
                                             onDelete={() =>
                                               setDeleteTaskTarget({
                                                 id: task.id,
@@ -1897,11 +2173,14 @@ export function MainProjectsPage() {
                                             }
                                             onOpen={() => openTaskDetails(project, task)}
                                             onPauseToggle={() => void handleProjectTaskPauseToggle(task)}
-                                            onStop={() =>
-                                              setStopTaskTarget({
-                                                id: task.id,
-                                                text: task.text,
-                                              })
+                                            onStop={
+                                              taskInProgress
+                                                ? () =>
+                                                    setStopTaskTarget({
+                                                      id: task.id,
+                                                      text: task.text,
+                                                    })
+                                                : undefined
                                             }
                                             onControlDragStart={preventControlDragStart}
                                             onControlMouseDown={stopDragPropagation}
@@ -1954,14 +2233,17 @@ export function MainProjectsPage() {
                     </div>
                     {projectTasksVisible ? (
                       <>
-                        <TaskQuickAdd
-                          onSubmit={(payload) => handleQuickTaskCreate(project, payload)}
-                          placeholder="Add task"
-                          projectId={project.id}
-                          stopPropagation
-                          submitAriaLabel={`Add task to ${project.name}`}
-                          submitTitle={`Add task to ${project.name}`}
-                        />
+                        {renderTaskComposer(
+                          project,
+                          getTaskComposerScopeKey(project.id),
+                          {
+                            placeholder: "Add task",
+                            submitAriaLabel: `Add task to ${project.name}`,
+                            submitTitle: `Add task to ${project.name}`,
+                          },
+                          (payload, selectedInstructionSetId) =>
+                            handleQuickTaskCreate(project, payload, null, selectedInstructionSetId),
+                        )}
 
                         {visibleProjectTasks.length < 1 ? (
                           <div className="rounded-md border border-dashed border-black/15 px-3 py-2 text-sm text-zinc-500">
@@ -1970,6 +2252,7 @@ export function MainProjectsPage() {
                         ) : (
                           visibleProjectTasks.map((task) => {
                             const taskLocked = !canEditTask(task);
+                            const taskInProgress = task.status === "in_progress";
 
                             return (
                               <TaskInlineRow
@@ -1985,6 +2268,7 @@ export function MainProjectsPage() {
                                 inProgress={task.status === "in_progress"}
                                 key={task.id}
                                 locked={taskLocked}
+                                sourceInstructionSetName={getTaskSourceLabel(task)}
                                 {...createDraggableContainerHandlers({
                                   enabled: !taskLocked,
                                   onDragEnd: () => setDraggingProjectTask(null),
@@ -2001,11 +2285,14 @@ export function MainProjectsPage() {
                                 }
                                 onOpen={() => openTaskDetails(project, task)}
                                 onPauseToggle={() => void handleProjectTaskPauseToggle(task)}
-                                onStop={() =>
-                                  setStopTaskTarget({
-                                    id: task.id,
-                                    text: task.text,
-                                  })
+                                onStop={
+                                  taskInProgress
+                                    ? () =>
+                                        setStopTaskTarget({
+                                          id: task.id,
+                                          text: task.text,
+                                        })
+                                    : undefined
                                 }
                                 onControlDragStart={preventControlDragStart}
                                 onControlMouseDown={stopDragPropagation}
@@ -2076,43 +2363,21 @@ export function MainProjectsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        onOpenChange={(open) => {
-          if (!open) {
-            setDeleteTaskTarget(null);
-          }
-        }}
+      <TaskDeleteConfirmationDialog
+        onCancel={() => setDeleteTaskTarget(null)}
+        onConfirm={() => void handleConfirmTaskDelete()}
         open={Boolean(deleteTaskTarget)}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Delete Task</DialogTitle>
-            <DialogDescription>
-              Delete task <strong>{truncateTaskPreview(deleteTaskTarget?.text ?? "")}</strong>? This action
-              cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          {deleteTaskTargetLocked ? (
+        taskText={truncateTaskPreview(deleteTaskTarget?.text ?? "")}
+        title="Delete Task"
+        warning={
+          deleteTaskTargetLocked ? (
             <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
               Task is currently in execution and cannot be changed.
             </div>
-          ) : null}
-          <DialogFooter>
-            <Button onClick={() => setDeleteTaskTarget(null)} type="button" variant="outline">
-              Cancel
-            </Button>
-            <Button
-              className="bg-red-600 text-white hover:bg-red-700"
-              disabled={deleteTaskTargetLocked}
-              onClick={() => void handleConfirmTaskDelete()}
-              type="button"
-            >
-              <Trash2 className="h-4 w-4" />
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          ) : null
+        }
+        confirmDisabled={deleteTaskTargetLocked}
+      />
 
       <Dialog
         onOpenChange={(open) => {

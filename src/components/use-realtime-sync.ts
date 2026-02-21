@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { CLIENT_SYNC_CHANNEL } from "../lib/client-sync";
 
 interface UseRealtimeSyncOptions {
   debounceMs?: number;
@@ -36,6 +37,44 @@ export function useRealtimeSync(
       if (debounceTimer) {
         clearTimeout(debounceTimer);
         debounceTimer = null;
+      }
+    };
+
+    const triggerSync = () => {
+      if (stopped) {
+        return;
+      }
+      scheduleSync();
+    };
+
+    const storageListener = (event: StorageEvent) => {
+      if (event.key !== CLIENT_SYNC_CHANNEL || !event.newValue) {
+        return;
+      }
+      triggerSync();
+    };
+
+    const attachBroadcastChannel = (): (() => void) | null => {
+      if (typeof BroadcastChannel === "undefined") {
+        return null;
+      }
+
+      const channel = new BroadcastChannel(CLIENT_SYNC_CHANNEL);
+      channel.onmessage = () => {
+        triggerSync();
+      };
+      return () => {
+        channel.close();
+      };
+    };
+
+    const handleWindowFocus = () => {
+      triggerSync();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        triggerSync();
       }
     };
 
@@ -75,6 +114,11 @@ export function useRealtimeSync(
       };
     };
 
+    window.addEventListener("storage", storageListener);
+    window.addEventListener("focus", handleWindowFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    const cleanupBroadcastChannel = attachBroadcastChannel();
     connect();
 
     return () => {
@@ -85,6 +129,12 @@ export function useRealtimeSync(
         source.close();
         source = null;
       }
+      window.removeEventListener("storage", storageListener);
+      if (cleanupBroadcastChannel) {
+        cleanupBroadcastChannel();
+      }
+      window.removeEventListener("focus", handleWindowFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [debounceMs, retryDelayMs]);
 }

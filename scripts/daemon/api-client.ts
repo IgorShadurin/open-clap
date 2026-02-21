@@ -16,6 +16,7 @@ import type {
 export interface DaemonApiClient {
   acknowledgeImmediateAction(actionId: string): Promise<void>;
   completeImmediateAction(actionId: string): Promise<void>;
+  fetchCodexUsageState(): Promise<{ fiveHourUsedPercent: number } | null>;
   fetchRuntimeSettings(revision?: string): Promise<FetchDaemonSettingsResponse>;
   fetchImmediateActions(): Promise<ImmediateAction[]>;
   fetchNextTasks(limit: number): Promise<DaemonTask[]>;
@@ -36,6 +37,10 @@ export class NoopDaemonApiClient implements DaemonApiClient {
 
   public async fetchImmediateActions(): Promise<ImmediateAction[]> {
     return [];
+  }
+
+  public async fetchCodexUsageState(): Promise<{ fiveHourUsedPercent: number } | null> {
+    return null;
   }
 
   public async fetchRuntimeSettings(revision?: string): Promise<FetchDaemonSettingsResponse> {
@@ -117,6 +122,35 @@ export class HttpDaemonApiClient implements DaemonApiClient {
     }
 
     return (await response.json()) as FetchDaemonSettingsResponse;
+  }
+
+  public async fetchCodexUsageState(): Promise<{ fiveHourUsedPercent: number } | null> {
+    const response = await fetch(`${this.baseUrl}/api/codex/usage`, {
+      body: JSON.stringify({}),
+      headers: {
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
+
+    if (!response.ok) {
+      throw new Error("Failed to fetch codex usage");
+    }
+
+    const payload = (await response.json()) as {
+      results?: Array<{
+        ok: boolean;
+        usage?: {
+          fiveHourUsedPercent?: number;
+        };
+      }>;
+    };
+    const first = payload.results?.[0];
+    if (!first?.ok || first.usage?.fiveHourUsedPercent === undefined) {
+      return null;
+    }
+
+    return { fiveHourUsedPercent: first.usage.fiveHourUsedPercent };
   }
 
   public async completeImmediateAction(actionId: string): Promise<void> {

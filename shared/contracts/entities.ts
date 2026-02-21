@@ -20,6 +20,7 @@ export interface ProjectEntity {
 export interface InstructionSetEntity {
   createdAt: string;
   description: string | null;
+  linkedInstructionSetIds: string[];
   id: string;
   imagePath: string | null;
   mainPageTasksVisible: boolean;
@@ -59,6 +60,7 @@ export type TaskEntityStatus = DaemonTaskStatus | "paused";
 export interface TaskEntity {
   createdAt: string;
   editLocked: boolean;
+  metadata: string | null;
   id: string;
   includePreviousContext: boolean;
   model: string;

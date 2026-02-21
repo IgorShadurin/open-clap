@@ -74,7 +74,8 @@ model Task {
   includePreviousContext  Boolean           @default(false)
   previousContextMessages Int               @default(0)
   showOnMainPage          Boolean           @default(true)
-  model                   String            @default("gpt-5.3-codex")
+  metadata                Json?
+  model                   String            @default("gpt-5.3-codex-spark")
   reasoning               String            @default("high")
   createdAt               DateTime          @default(now())
   inProgressAt            DateTime?
@@ -170,6 +171,7 @@ model InstructionSet {
   name        String
   description String?
   imagePath   String?
+  metadata   Json?
   mainPageTasksVisible Boolean  @default(true)
   priority    Int               @default(0)
   createdAt   DateTime          @default(now())
@@ -187,7 +189,7 @@ model InstructionTask {
   paused                  Boolean        @default(false)
   includePreviousContext  Boolean        @default(false)
   previousContextMessages Int            @default(0)
-  model                   String         @default("gpt-5.3-codex")
+  model                   String         @default("gpt-5.3-codex-spark")
   reasoning               String         @default("medium")
   createdAt               DateTime       @default(now())
   updatedAt               DateTime       @updatedAt

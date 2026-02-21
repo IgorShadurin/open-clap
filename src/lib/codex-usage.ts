@@ -3,6 +3,7 @@ import path from "node:path";
 import net from "node:net";
 import tls from "node:tls";
 import zlib from "node:zlib";
+import type { CodexUsageModelSummary } from "../../shared/contracts";
 
 export type CodexUsageWindow = {
   used_percent?: number;
@@ -23,6 +24,7 @@ export type CodexUsagePayload = {
   account_id?: string;
   plan_type?: string;
   rate_limit?: CodexUsageRateLimit;
+  additional_rate_limits?: unknown;
 };
 
 type AuthFileShape = {
@@ -57,6 +59,379 @@ export type FetchCodexUsageResult = {
   refreshedToken: boolean;
   usage: CodexUsagePayload;
 };
+
+type UnknownRecord = Record<string, unknown>;
+
+type UsageWindowSource = {
+  usedPercent: number;
+  resetAt: string;
+};
+
+const MODEL_SUMMARY_PRIMARY_WINDOW_KEYS = [
+  "primary_window",
+  "five_hour_window",
+] as const;
+
+const MODEL_SUMMARY_SECONDARY_WINDOW_KEYS = [
+  "secondary_window",
+  "weekly_window",
+] as const;
+
+const RATE_LIMIT_RESERVED_KEYS = new Set([
+  "allowed",
+  "limit_reached",
+  "plan_type",
+  "primary_window",
+  "secondary_window",
+  "models",
+  "additional_rate_limits",
+]);
+
+function asRecord(value: unknown): UnknownRecord | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  return value as UnknownRecord;
+}
+
+function parseNumeric(value: unknown): number | null {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+}
+
+function readString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length < 1 ? null : normalized;
+}
+
+function readPercent(value: unknown): number | null {
+  return parseNumeric(value);
+}
+
+function readWindow(source: UnknownRecord, keys: readonly string[]): UsageWindowSource | null {
+  for (const key of keys) {
+    const rawWindow = source[key];
+    const windowRecord = asRecord(rawWindow);
+    if (!windowRecord) {
+      continue;
+    }
+
+    const usedPercent = readPercent(windowRecord.used_percent) ?? 0;
+    const resetAt = formatUsageReset(
+      parseNumeric(windowRecord.reset_at) as number | null | undefined,
+    );
+
+    return {
+      resetAt,
+      usedPercent,
+    };
+  }
+
+  return null;
+}
+
+function normalizeModelSummary(summary: CodexUsageModelSummary): CodexUsageModelSummary {
+  return {
+    ...summary,
+    fiveHourUsedPercent: Number.isFinite(summary.fiveHourUsedPercent)
+      ? summary.fiveHourUsedPercent
+      : 0,
+    weeklyUsedPercent: Number.isFinite(summary.weeklyUsedPercent) ? summary.weeklyUsedPercent : null,
+  };
+}
+
+function toCanonicalModelIdentifier(value: string | null): string {
+  if (!value) {
+    return "";
+  }
+
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
+    .replace(/-+/g, "-");
+}
+
+function parseRateLimitSummarySource(value: unknown): UnknownRecord | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+
+  const nested = asRecord(record.rate_limit);
+  if (nested) {
+    return nested;
+  }
+
+  const keys = ["used_percent", "primary_window", "secondary_window", "allowed", "limit_reached"];
+  if (keys.some((key) => key in record)) {
+    return record;
+  }
+
+  return null;
+}
+
+function parseModelUsageSummary(
+  modelData: UnknownRecord,
+  fallbackModel: string | null,
+  defaultModelMeta: {
+    allowed: boolean;
+    planType?: string;
+  },
+): CodexUsageModelSummary | null {
+  const primaryWindow = readWindow(modelData, MODEL_SUMMARY_PRIMARY_WINDOW_KEYS);
+  const secondaryWindow = readWindow(modelData, MODEL_SUMMARY_SECONDARY_WINDOW_KEYS);
+
+  const modelName =
+    readString(modelData.model) ??
+    readString(modelData.model_name) ??
+    fallbackModel ??
+    readString(modelData.name);
+  if (!modelName) {
+    return null;
+  }
+
+  const weeklyUsedPercent = readPercent(
+    modelData.weeklyUsedPercent ??
+      modelData.secondary_used_percent ??
+      (secondaryWindow ? secondaryWindow.usedPercent : null),
+  );
+
+  return normalizeModelSummary({
+    allowed: Boolean(modelData.allowed ?? defaultModelMeta.allowed),
+    fiveHourResetAt: primaryWindow?.resetAt ?? "n/a",
+    fiveHourUsedPercent: primaryWindow?.usedPercent ?? 0,
+    model: modelName,
+    modelLabel: readString(modelData.modelLabel) ?? readString(modelData.model_name_label),
+    planType: readString(modelData.plan_type) ?? defaultModelMeta.planType,
+    weeklyResetAt: secondaryWindow?.resetAt ?? "n/a",
+    weeklyUsedPercent: weeklyUsedPercent ?? (secondaryWindow ? secondaryWindow.usedPercent : null),
+  });
+}
+
+function inferSingleModelSummary(
+  payload: UnknownRecord,
+  defaultModelMeta: {
+    allowed: boolean;
+    planType?: string;
+  },
+): CodexUsageModelSummary {
+  const primaryWindow = readWindow(payload, MODEL_SUMMARY_PRIMARY_WINDOW_KEYS);
+  const secondaryWindow = readWindow(payload, MODEL_SUMMARY_SECONDARY_WINDOW_KEYS);
+
+  return {
+    allowed: defaultModelMeta.allowed,
+    fiveHourResetAt: primaryWindow?.resetAt ?? "n/a",
+    fiveHourUsedPercent: primaryWindow?.usedPercent ?? 0,
+    model: "default",
+    planType: defaultModelMeta.planType,
+    weeklyResetAt: secondaryWindow?.resetAt ?? "n/a",
+    weeklyUsedPercent: secondaryWindow ? secondaryWindow.usedPercent : null,
+  };
+}
+
+function parseAdditionalRateLimitEntries(
+  payload: UnknownRecord,
+  defaultModelMeta: {
+    allowed: boolean;
+    planType?: string;
+  },
+): CodexUsageModelSummary[] {
+  const details = payload.additional_rate_limits;
+  if (!details) {
+    return [];
+  }
+
+  const extracted: CodexUsageModelSummary[] = [];
+  const seenModels = new Set<string>();
+  const detailItems: Array<{ detail: UnknownRecord; modelKey?: string }> = [];
+
+  if (Array.isArray(details)) {
+    for (const rawDetail of details) {
+      const detailRecord = asRecord(rawDetail);
+      if (!detailRecord) {
+        continue;
+      }
+
+      detailItems.push({ detail: detailRecord });
+    }
+  } else {
+    const rawDetails = asRecord(details);
+    if (!rawDetails) {
+      return [];
+    }
+
+    for (const [modelKey, rawDetail] of Object.entries(rawDetails)) {
+      const detailRecord = asRecord(rawDetail);
+      if (!detailRecord) {
+        continue;
+      }
+
+      detailItems.push({ detail: detailRecord, modelKey });
+    }
+  }
+
+  for (const { detail: detailRecord, modelKey } of detailItems) {
+    const modelName =
+      readString(detailRecord.metered_feature) ??
+      readString(detailRecord.model) ??
+      readString(detailRecord.model_name) ??
+      readString(detailRecord.limitName) ??
+      modelKey ??
+      readString(detailRecord.limit_name);
+
+    if (!modelName) {
+      continue;
+    }
+
+    const rawRateLimit = parseRateLimitSummarySource(detailRecord);
+    const parsed = parseModelUsageSummary(
+      rawRateLimit ?? {},
+      modelName,
+      defaultModelMeta,
+    );
+    if (!parsed) {
+      continue;
+    }
+
+    const modelLabel =
+      readString(detailRecord.limit_name) ??
+      readString(detailRecord.model_name_label) ??
+      parsed.modelLabel;
+    const summary: CodexUsageModelSummary = {
+      ...parsed,
+      modelLabel,
+    };
+
+    const dedupeKey = toCanonicalModelIdentifier(summary.model);
+    if (!dedupeKey) {
+      continue;
+    }
+
+    if (!seenModels.has(dedupeKey)) {
+      seenModels.add(dedupeKey);
+      extracted.push(summary);
+    }
+  }
+
+  return extracted;
+}
+
+export function extractCodexUsageModelSummaries(
+  payload: CodexUsagePayload,
+): CodexUsageModelSummary[] {
+  const rateLimit = asRecord(payload.rate_limit);
+  if (!rateLimit) {
+    return [];
+  }
+
+  const extracted: CodexUsageModelSummary[] = [];
+  const seenModels = new Set<string>();
+  const defaultModelMeta = {
+    allowed: Boolean(rateLimit.allowed),
+    planType: readString(payload.plan_type) ?? undefined,
+  };
+  const pushSummary = (summary: CodexUsageModelSummary) => {
+    if (!seenModels.has(summary.model)) {
+      seenModels.add(summary.model);
+      extracted.push(summary);
+    }
+  };
+
+  const modelEntries = rateLimit.models;
+  const hasExplicitModelEntries =
+    Array.isArray(modelEntries) || asRecord(modelEntries) !== null;
+
+  if (Array.isArray(modelEntries)) {
+    for (const item of modelEntries) {
+      const modelRecord = asRecord(item);
+      if (!modelRecord) {
+        continue;
+      }
+
+      const summary = parseModelUsageSummary(modelRecord, null, defaultModelMeta);
+      if (summary) {
+        pushSummary(summary);
+      }
+    }
+  }
+
+  if (asRecord(modelEntries) !== null) {
+    for (const [modelKey, raw] of Object.entries(modelEntries as UnknownRecord)) {
+      const modelRecord = asRecord(raw);
+      if (!modelRecord) {
+        continue;
+      }
+      const summary = parseModelUsageSummary(modelRecord, modelKey, defaultModelMeta);
+      if (summary) {
+        pushSummary(summary);
+      }
+    }
+  }
+
+  if (!hasExplicitModelEntries) {
+    const directSummary = parseModelUsageSummary(rateLimit, null, defaultModelMeta);
+    if (directSummary) {
+      pushSummary(directSummary);
+    } else {
+      pushSummary(inferSingleModelSummary(rateLimit, defaultModelMeta));
+    }
+  }
+
+  const additionalRateLimitSummaries = parseAdditionalRateLimitEntries(payload as UnknownRecord, {
+    allowed: defaultModelMeta.allowed,
+    planType: defaultModelMeta.planType,
+  });
+  for (const summary of additionalRateLimitSummaries) {
+    pushSummary(summary);
+  }
+
+  if (extracted.length > 0) {
+    return extracted;
+  }
+
+  const fallback = inferSingleModelSummary(rateLimit, {
+    allowed: defaultModelMeta.allowed,
+    planType: defaultModelMeta.planType,
+  });
+  const fallbackModel = readString((payload as UnknownRecord).model) ?? readString(rateLimit.model);
+  if (fallbackModel) {
+    return [{ ...fallback, model: fallbackModel }];
+  }
+
+  if (extracted.length > 0) {
+    return extracted;
+  }
+
+  for (const [modelName, rawModel] of Object.entries(rateLimit)) {
+    if (RATE_LIMIT_RESERVED_KEYS.has(modelName)) {
+      continue;
+    }
+    const modelRecord = asRecord(rawModel);
+    if (!modelRecord) {
+      continue;
+    }
+    const summary = parseModelUsageSummary(modelRecord, modelName, defaultModelMeta);
+    if (summary) {
+      return [summary];
+    }
+  }
+
+  return [fallback];
+}
 
 export const DEFAULT_CODEX_USAGE_ENDPOINTS = [
   "/backend-api/codex/usage",

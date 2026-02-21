@@ -1,4 +1,4 @@
-import { TaskStatus, type Prisma } from "@prisma/client";
+import { Prisma, TaskStatus } from "@prisma/client";
 
 import type {
   ProjectEntity,
@@ -10,8 +10,9 @@ import { publishAppSync } from "./live-sync";
 import { DEFAULT_TASK_MODEL, DEFAULT_TASK_REASONING } from "./task-reasoning";
 import { normalizeUserPath, validatePathExists } from "./path-validation";
 import { prisma } from "./prisma";
+import { markInstructionTaskMetadataEdited, parseInstructionTaskMetadata } from "./instruction-set-links";
 
-function stringifyMetadata(value: Prisma.JsonValue | null): string | null {
+function stringifyMetadata(value: Prisma.JsonValue | null | undefined): string | null {
   if (value === null) {
     return null;
   }
@@ -79,6 +80,7 @@ function toTaskEntity(task: {
   id: string;
   includePreviousContext: boolean;
   model: string;
+  metadata?: Prisma.JsonValue | null;
   paused: boolean;
   previousContextMessages: number;
   priority: number;
@@ -94,6 +96,7 @@ function toTaskEntity(task: {
     editLocked: task.editLocked,
     id: task.id,
     includePreviousContext: task.includePreviousContext,
+    metadata: stringifyMetadata(task.metadata),
     model: task.model,
     paused: task.paused,
     previousContextMessages: task.previousContextMessages,
@@ -160,6 +163,15 @@ function parseMetadata(metadata: string | undefined): Prisma.InputJsonValue | un
 
   const parsed = JSON.parse(metadata) as Prisma.InputJsonValue | null;
   return parsed === null ? undefined : parsed;
+}
+
+function markInstructionMetadataEdited(metadata: Prisma.JsonValue | null | undefined): Prisma.InputJsonValue | undefined {
+  const parsed = parseInstructionTaskMetadata(metadata);
+  if (!parsed) {
+    return undefined;
+  }
+
+  return JSON.parse(markInstructionTaskMetadataEdited(parsed, true)) as Prisma.InputJsonValue;
 }
 
 async function nextPriority(
@@ -548,9 +560,44 @@ export async function listTasks(filters?: {
   return tasks.map(toTaskEntity);
 }
 
+async function assertInstructionSetNotAlreadyAdded({
+  metadata,
+  projectId,
+}: {
+  metadata: Prisma.InputJsonValue | undefined;
+  projectId: string;
+}): Promise<void> {
+  const instructionMetadata = parseInstructionTaskMetadata(metadata);
+  if (!instructionMetadata?.instructionSetId) {
+    return;
+  }
+
+  const taskRows = await prisma.task.findMany({
+    where: {
+      projectId,
+      metadata: { not: Prisma.JsonNull },
+    },
+    select: { metadata: true },
+  });
+
+  const hasMatchingProjectScope = taskRows.some((taskRow) => {
+    const rowMetadata = parseInstructionTaskMetadata(taskRow.metadata);
+    if (!rowMetadata || rowMetadata.instructionSetId !== instructionMetadata.instructionSetId) {
+      return false;
+    }
+    return true;
+  });
+
+  if (hasMatchingProjectScope) {
+    throw new Error("Instruction set already added to this project scope");
+  }
+}
+
 export async function createTask(input: {
   includePreviousContext?: boolean;
   model?: string;
+  metadata?: string;
+  skipInstructionSetDuplicateCheck?: boolean;
   previousContextMessages?: number;
   projectId: string;
   reasoning?: string;
@@ -562,15 +609,24 @@ export async function createTask(input: {
     subprojectId:
       typeof input.subprojectId === "string" ? input.subprojectId : input.subprojectId === null ? null : undefined,
   });
+  const parsedMetadata = parseMetadata(input.metadata);
+
+  if (!input.skipInstructionSetDuplicateCheck) {
+    await assertInstructionSetNotAlreadyAdded({
+      metadata: parsedMetadata,
+      projectId: input.projectId,
+    });
+  }
 
   const task = await prisma.task.create({
     data: {
-      includePreviousContext: input.includePreviousContext ?? false,
-      model: input.model ?? DEFAULT_TASK_MODEL,
-      previousContextMessages: input.previousContextMessages ?? 0,
-      priority,
-      projectId: input.projectId,
-      reasoning: input.reasoning ?? DEFAULT_TASK_REASONING,
+    includePreviousContext: input.includePreviousContext ?? false,
+    model: input.model ?? DEFAULT_TASK_MODEL,
+    previousContextMessages: input.previousContextMessages ?? 0,
+    priority,
+    projectId: input.projectId,
+      metadata: parsedMetadata,
+    reasoning: input.reasoning ?? DEFAULT_TASK_REASONING,
       subprojectId:
         typeof input.subprojectId === "string" ? input.subprojectId : null,
       text: input.text,
@@ -595,6 +651,7 @@ export async function updateTask(
   const existing = await prisma.task.findUnique({
     select: {
       editLocked: true,
+      metadata: true,
       status: true,
     },
     where: { id: taskId },
@@ -602,6 +659,17 @@ export async function updateTask(
   if (!existing) {
     throw new Error("Task not found");
   }
+
+  const shouldMarkInstructionTaskEdited =
+    input.text !== undefined ||
+    input.model !== undefined ||
+    input.reasoning !== undefined ||
+    input.includePreviousContext !== undefined ||
+    input.previousContextMessages !== undefined;
+
+  const metadata = shouldMarkInstructionTaskEdited
+    ? markInstructionMetadataEdited(existing.metadata)
+    : undefined;
 
   const editingFieldsTouched =
     input.text !== undefined ||
@@ -622,10 +690,11 @@ export async function updateTask(
       includePreviousContext: input.includePreviousContext,
       model: input.model,
       paused: input.paused,
-      previousContextMessages: input.previousContextMessages,
-      reasoning: input.reasoning,
-      status: input.status,
-      text: input.text,
+    previousContextMessages: input.previousContextMessages,
+    reasoning: input.reasoning,
+    status: input.status,
+    metadata,
+    text: input.text,
     },
     where: { id: taskId },
   });

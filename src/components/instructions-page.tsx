@@ -25,6 +25,13 @@ import {
   preventControlDragStart,
   stopDragPropagation,
 } from "../lib/drag-drop";
+import { emitClientSync } from "../lib/client-sync";
+import {
+  DEFAULT_TASK_MODEL,
+  DEFAULT_TASK_REASONING,
+  TASK_MODEL_OPTIONS,
+  TASK_REASONING_OPTIONS,
+} from "@/lib/task-reasoning";
 import { requestJson } from "./app-dashboard-helpers";
 import { OpenClapHeader } from "./openclap-header";
 import { buildProjectAvatar } from "./project-avatar";
@@ -42,7 +49,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "./ui/dialog";
+import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
+import { Select } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 
 interface InstructionSetTreeItem extends InstructionSetEntity {
@@ -62,6 +71,13 @@ export function InstructionsPage() {
   const [editingSetId, setEditingSetId] = useState<string | null>(null);
   const [editingSetName, setEditingSetName] = useState("");
   const [editingSetSubmitting, setEditingSetSubmitting] = useState(false);
+  const [editTaskTarget, setEditTaskTarget] = useState<InstructionTaskEntity | null>(null);
+  const [editTaskText, setEditTaskText] = useState("");
+  const [editTaskModel, setEditTaskModel] = useState("");
+  const [editTaskReasoning, setEditTaskReasoning] = useState("");
+  const [editTaskIncludeContext, setEditTaskIncludeContext] = useState(false);
+  const [editTaskContextCount, setEditTaskContextCount] = useState(0);
+  const [editTaskSubmitting, setEditTaskSubmitting] = useState(false);
   const [deleteTaskTarget, setDeleteTaskTarget] = useState<{
     id: string;
     text: string;
@@ -85,7 +101,9 @@ export function InstructionsPage() {
     }
 
     try {
-      const result = await requestJson<InstructionSetTreeItem[]>("/api/instructions");
+      const result = await requestJson<InstructionSetTreeItem[]>("/api/instructions", {
+        cache: "no-store",
+      });
       setSets(result);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to load instructions");
@@ -311,6 +329,7 @@ export function InstructionsPage() {
         method: "POST",
       });
       await loadSets({ silent: true });
+      emitClientSync("instructions.task_reordered");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to reorder tasks");
     } finally {
@@ -350,6 +369,43 @@ export function InstructionsPage() {
       setErrorMessage(error instanceof Error ? error.message : "Failed to update instruction set");
     } finally {
       setEditingSetSubmitting(false);
+    }
+  };
+
+  const openTaskEdit = (task: InstructionTaskEntity) => {
+    setEditTaskTarget(task);
+    setEditTaskText(task.text);
+    setEditTaskModel(task.model);
+    setEditTaskReasoning(task.reasoning);
+    setEditTaskIncludeContext(task.includePreviousContext);
+    setEditTaskContextCount(task.previousContextMessages);
+  };
+
+  const saveTaskEdit = async () => {
+    if (!editTaskTarget || editTaskText.trim().length < 1) {
+      return;
+    }
+
+    setEditTaskSubmitting(true);
+    try {
+      await requestJson(`/api/instructions/tasks/${editTaskTarget.id}`, {
+        body: JSON.stringify({
+          includePreviousContext: editTaskIncludeContext,
+          model: editTaskModel.trim() || DEFAULT_TASK_MODEL,
+          previousContextMessages: editTaskIncludeContext ? Math.max(0, editTaskContextCount) : 0,
+          reasoning: editTaskReasoning.trim() || DEFAULT_TASK_REASONING,
+          text: editTaskText.trim(),
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "PATCH",
+      });
+      await loadSets({ silent: true });
+      setEditTaskTarget(null);
+      toast.success("Instruction task updated");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to update instruction task");
+    } finally {
+      setEditTaskSubmitting(false);
     }
   };
 
@@ -681,7 +737,6 @@ export function InstructionsPage() {
                                 <TaskInlineRow
                                   deleteAriaLabel={`Remove task ${task.text}`}
                                   deleteTitle={`Remove task ${task.text}`}
-                                  disableText
                                   compactTextOffset={false}
                                   draggable
                                   {...createDraggableContainerHandlers({
@@ -698,6 +753,7 @@ export function InstructionsPage() {
                                   inProgress={false}
                                   key={task.id}
                                   allowPause={false}
+                                  onOpen={() => openTaskEdit(task)}
                                   onDelete={() => setDeleteTaskTarget({ id: task.id, text: task.text })}
                                   onPauseToggle={() =>
                                     void handleInstructionTaskAction(task.id, task.paused ? "resume" : "pause")
@@ -757,6 +813,93 @@ export function InstructionsPage() {
           taskText={deleteTaskTarget?.text ?? ""}
           title="Delete instruction task"
         />
+
+        <Dialog
+          onOpenChange={(open) => (!open ? setEditTaskTarget(null) : undefined)}
+          open={Boolean(editTaskTarget)}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Edit instruction task</DialogTitle>
+              <DialogDescription>Update task details.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <Textarea
+                className="min-h-[150px]"
+                onChange={(event) => setEditTaskText(event.target.value)}
+                value={editTaskText}
+              />
+              <div className="grid gap-3 md:grid-cols-2">
+                <Select
+                  onChange={(event) => setEditTaskModel(event.target.value)}
+                  value={editTaskModel}
+                >
+                  {!TASK_MODEL_OPTIONS.some((option) => option.value === editTaskModel) &&
+                  editTaskModel.trim().length > 0 ? (
+                    <option value={editTaskModel}>{editTaskModel}</option>
+                  ) : null}
+                  {TASK_MODEL_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+                <Select
+                  onChange={(event) => setEditTaskReasoning(event.target.value)}
+                  value={editTaskReasoning}
+                >
+                  {TASK_REASONING_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="flex h-10 items-center gap-2 rounded-md border border-black/15 px-3 text-sm">
+                  <Checkbox
+                    checked={editTaskIncludeContext}
+                    onCheckedChange={(checked) => setEditTaskIncludeContext(Boolean(checked))}
+                  />
+                  Include context
+                </label>
+                <Input
+                  disabled={!editTaskIncludeContext}
+                  min={0}
+                  onChange={(event) =>
+                    setEditTaskContextCount(
+                      Number.isFinite(Number(event.target.value))
+                        ? Math.max(0, Number.parseInt(event.target.value, 10))
+                        : 0,
+                    )
+                  }
+                  type="number"
+                  value={editTaskContextCount}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                className="gap-2"
+                onClick={() => setEditTaskTarget(null)}
+                type="button"
+                variant="outline"
+              >
+                <X className="h-4 w-4" />
+                Cancel
+              </Button>
+              <Button
+                className="gap-2"
+                disabled={editTaskSubmitting || editTaskText.trim().length < 1}
+                onClick={() => void saveTaskEdit()}
+                type="button"
+              >
+                <Save className="h-4 w-4" />
+                Save
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <Dialog
           onOpenChange={(open) => {

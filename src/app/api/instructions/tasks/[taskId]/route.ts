@@ -1,14 +1,11 @@
 import { NextResponse } from "next/server";
 
-import type {
-  ApiErrorShape,
-  InstructionTaskEntity,
-} from "../../../../../../../shared/contracts";
-import { createApiError } from "../../../../../../lib/api-error";
+import type { ApiErrorShape, InstructionTaskEntity } from "../../../../../../shared/contracts";
+import { createApiError } from "../../../../../lib/api-error";
 import {
   deleteInstructionTask,
   updateInstructionTask,
-} from "../../../../../../lib/instructions-service";
+} from "../../../../../lib/instructions-service";
 
 interface UpdateInstructionTaskBody {
   includePreviousContext?: boolean;

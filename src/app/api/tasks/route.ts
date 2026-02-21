@@ -7,6 +7,7 @@ import { createTask, listTasks } from "../../../lib/entities-service";
 interface CreateTaskBody {
   includePreviousContext?: boolean;
   model?: string;
+  metadata?: string;
   previousContextMessages?: number;
   projectId: string;
   reasoning?: string;
@@ -42,11 +43,11 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  if (
-    !body ||
-    typeof body.projectId !== "string" ||
-    typeof body.text !== "string"
-  ) {
+      if (
+        !body ||
+        typeof body.projectId !== "string" ||
+        typeof body.text !== "string"
+      ) {
     return NextResponse.json<ApiErrorShape>(
       createApiError("INVALID_PAYLOAD", "Fields `projectId` and `text` are required"),
       { status: 400 },
@@ -54,7 +55,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const task = await createTask(body);
+      const task = await createTask(body);
     return NextResponse.json<TaskEntity>(task, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

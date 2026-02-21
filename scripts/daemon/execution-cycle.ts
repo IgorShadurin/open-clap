@@ -20,6 +20,51 @@ interface TaskControl extends RunningTaskControl {
   stopped: boolean;
 }
 
+const FIVE_HOUR_MIN_REMAINING_PERCENT = 2;
+
+function computeRemainingFiveHourPercent(usage: {
+  fiveHourUsedPercent?: number;
+}): number | null {
+  const usedPercent = usage.fiveHourUsedPercent;
+  if (typeof usedPercent !== "number" || !Number.isFinite(usedPercent)) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(100, 100 - usedPercent));
+}
+
+async function shouldAllowExecutionBasedOnFiveHourUsage(
+  apiClient: DaemonApiClient,
+  logger: LoggerLike,
+): Promise<boolean> {
+  try {
+    const usage = await apiClient.fetchCodexUsageState();
+    if (!usage) {
+      logger.log("waiting", "Execution paused: 5h usage metrics unavailable");
+      return false;
+    }
+
+    const remainingPercent = computeRemainingFiveHourPercent(usage);
+    if (remainingPercent === null) {
+      logger.log("waiting", "Execution paused: 5h usage values are invalid");
+      return false;
+    }
+
+    if (remainingPercent < FIVE_HOUR_MIN_REMAINING_PERCENT) {
+      logger.log(
+        "waiting",
+        `Execution paused: 5h limit remaining ${remainingPercent.toFixed(1)}%`,
+      );
+      return false;
+    }
+
+    return true;
+  } catch {
+    logger.log("waiting", "Execution paused: 5h usage check failed");
+    return false;
+  }
+}
+
 export interface RunTaskExecutionCycleOptions {
   activeWorkers: Map<string, Promise<void>>;
   apiClient: DaemonApiClient;
@@ -64,6 +109,10 @@ export async function runTaskExecutionCycle({
   const slotsRequested = scheduler.availableSlots();
   if (slotsRequested < 1) {
     logger.log("waiting", "No free execution slots");
+    return { fetched: 0, slotsRequested, started: 0 };
+  }
+
+  if (!(await shouldAllowExecutionBasedOnFiveHourUsage(apiClient, logger))) {
     return { fetched: 0, slotsRequested, started: 0 };
   }
 

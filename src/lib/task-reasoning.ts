@@ -1,4 +1,4 @@
-export const DEFAULT_TASK_MODEL = "gpt-5.3-codex-spark";
+export const DEFAULT_TASK_MODEL = "gpt-5.3-codex";
 export const DEFAULT_TASK_REASONING = "medium";
 
 export const TASK_MODEL_OPTIONS = [
