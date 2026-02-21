@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import type { CodexUsageApiResponse, SkillSetTreeItem } from "../../../shared/contracts";
 import { requestJson } from "../app-dashboard/helpers";
@@ -11,7 +11,6 @@ import {
   resolveCodexModelDisplayLabel,
 } from "./content-helpers";
 import type { MainProjectsPageCoreState } from "./content-core-state";
-import { useMemo } from "react";
 import type { ProjectTree } from "./content-helpers";
 
 export interface MainProjectsPageLoaders {
@@ -22,44 +21,72 @@ export interface MainProjectsPageLoaders {
 }
 
 export const useMainProjectsPageLoaders = (state: MainProjectsPageCoreState): MainProjectsPageLoaders => {
+  const {
+    instructionSets,
+    projects,
+    openProjectMenuId,
+    openProjectIconMenuId,
+    setLoading,
+    setProjects,
+    setHasLoadedOnce,
+    setErrorMessage,
+    setInstructionSets,
+    setCodexResolvedAuthFilePath,
+    setCodexConnected,
+    setCodexConnectionError,
+    setCodexUsageModelSummaries,
+    setCodexWeeklyLimitUsedPercent,
+    setCodexFiveHourLimitUsedPercent,
+    setCodexFiveHourResetAt,
+    setCodexWeeklyResetAt,
+    setCodexUsageEndpoint,
+    setCodexUsageCheckedAt,
+    setCodexUsageLoaded,
+    setOpenProjectMenuId,
+    setOpenProjectIconMenuId,
+    setTaskDetailsTarget,
+    codexInfoOpenModel,
+    setCodexInfoOpenModel,
+  } = state;
+
   const sortedInstructionSets = useMemo(
     () =>
-      [...state.instructionSets].sort((a, b) =>
-        a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+      [...instructionSets].sort((left, right) =>
+        left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
       ),
-    [state.instructionSets],
+    [instructionSets],
   );
 
   const loadProjects = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
-      state.setLoading(true);
+      setLoading(true);
     }
 
     try {
       const tree = await requestJson<ProjectTree[]>("/api/projects/tree", {
         cache: "no-store",
       });
-      state.setProjects(tree);
+      setProjects(tree);
     } catch (error) {
-      state.setErrorMessage(error instanceof Error ? error.message : "Failed to load projects");
+      setErrorMessage(error instanceof Error ? error.message : "Failed to load projects");
     } finally {
       if (!options?.silent) {
-        state.setLoading(false);
+        setLoading(false);
       }
-      state.setHasLoadedOnce(true);
+      setHasLoadedOnce(true);
     }
-  }, [state]);
+  }, [setErrorMessage, setHasLoadedOnce, setLoading, setProjects]);
 
   const loadInstructionSets = useCallback(async () => {
     try {
       const result = await requestJson<SkillSetTreeItem[]>("/api/skills", {
         cache: "no-store",
       });
-      state.setInstructionSets(result);
+      setInstructionSets(result);
     } catch (error) {
-      state.setErrorMessage(error instanceof Error ? error.message : "Failed to load skill sets");
+      setErrorMessage(error instanceof Error ? error.message : "Failed to load skill sets");
     }
-  }, [state]);
+  }, [setErrorMessage, setInstructionSets]);
 
   const loadCodexUsage = useCallback(async () => {
     try {
@@ -77,26 +104,27 @@ export const useMainProjectsPageLoaders = (state: MainProjectsPageCoreState): Ma
         throw new Error("Usage API returned an empty result");
       }
 
-      state.setCodexResolvedAuthFilePath(result.authFile || DEFAULT_CODEX_AUTH_FILE);
+      setCodexResolvedAuthFilePath(result.authFile || DEFAULT_CODEX_AUTH_FILE);
 
       if (!result.ok || !result.usage) {
         const rawError = (result.error || "Unknown usage API error").trim();
         const compactError = rawError.replace(/\s+/g, " ").slice(0, 220);
-        state.setCodexConnected(false);
-        state.setCodexConnectionError(compactError);
-        state.setCodexUsageModelSummaries([]);
-        state.setCodexWeeklyLimitUsedPercent(0);
-        state.setCodexFiveHourLimitUsedPercent(0);
-        state.setCodexFiveHourResetAt(null);
-        state.setCodexWeeklyResetAt(null);
-        state.setCodexUsageEndpoint(result.endpoint ?? null);
-        state.setCodexUsageCheckedAt(new Date().toISOString());
+
+        setCodexConnected(false);
+        setCodexConnectionError(compactError);
+        setCodexUsageModelSummaries([]);
+        setCodexWeeklyLimitUsedPercent(0);
+        setCodexFiveHourLimitUsedPercent(0);
+        setCodexFiveHourResetAt(null);
+        setCodexWeeklyResetAt(null);
+        setCodexUsageEndpoint(result.endpoint ?? null);
+        setCodexUsageCheckedAt(new Date().toISOString());
         return;
       }
 
-      state.setCodexConnected(true);
-      state.setCodexConnectionError(null);
-      state.setCodexUsageModelSummaries(
+      setCodexConnected(true);
+      setCodexConnectionError(null);
+      setCodexUsageModelSummaries(
         (result.usage.models ?? [])
           .map((model) => ({
             ...model,
@@ -108,29 +136,41 @@ export const useMainProjectsPageLoaders = (state: MainProjectsPageCoreState): Ma
             ),
           ),
       );
-      state.setCodexWeeklyLimitUsedPercent(result.usage.weeklyUsedPercent ?? 0);
-      state.setCodexFiveHourLimitUsedPercent(result.usage.fiveHourUsedPercent);
-      state.setCodexFiveHourResetAt(result.usage.fiveHourResetAt || null);
-      state.setCodexWeeklyResetAt(result.usage.weeklyResetAt || null);
-      state.setCodexUsageEndpoint(result.endpoint ?? null);
-      state.setCodexUsageCheckedAt(new Date().toISOString());
+      setCodexWeeklyLimitUsedPercent(result.usage.weeklyUsedPercent ?? 0);
+      setCodexFiveHourLimitUsedPercent(result.usage.fiveHourUsedPercent);
+      setCodexFiveHourResetAt(result.usage.fiveHourResetAt || null);
+      setCodexWeeklyResetAt(result.usage.weeklyResetAt || null);
+      setCodexUsageEndpoint(result.endpoint ?? null);
+      setCodexUsageCheckedAt(new Date().toISOString());
     } catch (error) {
       const message = (error instanceof Error ? error.message : "Failed to check Codex usage")
         .replace(/\s+/g, " ")
         .slice(0, 220);
-      state.setCodexConnected(false);
-      state.setCodexConnectionError(message);
-      state.setCodexUsageModelSummaries([]);
-      state.setCodexWeeklyLimitUsedPercent(0);
-      state.setCodexFiveHourLimitUsedPercent(0);
-      state.setCodexFiveHourResetAt(null);
-      state.setCodexWeeklyResetAt(null);
-      state.setCodexUsageEndpoint(null);
-      state.setCodexUsageCheckedAt(new Date().toISOString());
+      setCodexConnected(false);
+      setCodexConnectionError(message);
+      setCodexUsageModelSummaries([]);
+      setCodexWeeklyLimitUsedPercent(0);
+      setCodexFiveHourLimitUsedPercent(0);
+      setCodexFiveHourResetAt(null);
+      setCodexWeeklyResetAt(null);
+      setCodexUsageEndpoint(null);
+      setCodexUsageCheckedAt(new Date().toISOString());
     } finally {
-      state.setCodexUsageLoaded(true);
+      setCodexUsageLoaded(true);
     }
-  }, [state]);
+  }, [
+    setCodexConnected,
+    setCodexConnectionError,
+    setCodexFiveHourLimitUsedPercent,
+    setCodexFiveHourResetAt,
+    setCodexResolvedAuthFilePath,
+    setCodexUsageCheckedAt,
+    setCodexUsageEndpoint,
+    setCodexUsageLoaded,
+    setCodexUsageModelSummaries,
+    setCodexWeeklyLimitUsedPercent,
+    setCodexWeeklyResetAt,
+  ]);
 
   useEffect(() => {
     void loadProjects();
@@ -158,12 +198,12 @@ export const useMainProjectsPageLoaders = (state: MainProjectsPageCoreState): Ma
   });
 
   useEffect(() => {
-    state.setTaskDetailsTarget((current) => {
+    setTaskDetailsTarget((current) => {
       if (!current) {
         return current;
       }
 
-      const latestTask = findTaskInProjects(state.projects, current.task.id);
+      const latestTask = findTaskInProjects(projects, current.task.id);
       if (!latestTask) {
         return null;
       }
@@ -177,24 +217,21 @@ export const useMainProjectsPageLoaders = (state: MainProjectsPageCoreState): Ma
         task: latestTask,
       };
     });
-  }, [state, state.projects]);
+  }, [projects, setTaskDetailsTarget]);
 
   useEffect(() => {
-    if (!state.openProjectMenuId && !state.openProjectIconMenuId) {
+    if (!openProjectMenuId && !openProjectIconMenuId) {
+      return;
+    }
+    if (openProjectMenuId && !projects.some((project) => project.id === openProjectMenuId)) {
+      setOpenProjectMenuId(null);
       return;
     }
     if (
-      state.openProjectMenuId &&
-      !state.projects.some((project) => project.id === state.openProjectMenuId)
+      openProjectIconMenuId &&
+      !projects.some((project) => project.id === openProjectIconMenuId)
     ) {
-      state.setOpenProjectMenuId(null);
-      return;
-    }
-    if (
-      state.openProjectIconMenuId &&
-      !state.projects.some((project) => project.id === state.openProjectIconMenuId)
-    ) {
-      state.setOpenProjectIconMenuId(null);
+      setOpenProjectIconMenuId(null);
       return;
     }
 
@@ -211,14 +248,14 @@ export const useMainProjectsPageLoaders = (state: MainProjectsPageCoreState): Ma
         return;
       }
 
-      state.setOpenProjectMenuId(null);
-      state.setOpenProjectIconMenuId(null);
+      setOpenProjectMenuId(null);
+      setOpenProjectIconMenuId(null);
     };
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        state.setOpenProjectMenuId(null);
-        state.setOpenProjectIconMenuId(null);
+        setOpenProjectMenuId(null);
+        setOpenProjectIconMenuId(null);
       }
     };
 
@@ -229,14 +266,15 @@ export const useMainProjectsPageLoaders = (state: MainProjectsPageCoreState): Ma
       window.removeEventListener("keydown", handleEscape);
     };
   }, [
-    state.openProjectIconMenuId,
-    state.openProjectMenuId,
-    state.projects,
-    state,
+    openProjectIconMenuId,
+    openProjectMenuId,
+    projects,
+    setOpenProjectIconMenuId,
+    setOpenProjectMenuId,
   ]);
 
   useEffect(() => {
-    if (!state.codexInfoOpenModel) {
+    if (!codexInfoOpenModel) {
       return;
     }
 
@@ -252,12 +290,12 @@ export const useMainProjectsPageLoaders = (state: MainProjectsPageCoreState): Ma
         return;
       }
 
-      state.setCodexInfoOpenModel(null);
+      setCodexInfoOpenModel(null);
     };
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        state.setCodexInfoOpenModel(null);
+        setCodexInfoOpenModel(null);
       }
     };
 
@@ -267,7 +305,7 @@ export const useMainProjectsPageLoaders = (state: MainProjectsPageCoreState): Ma
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("keydown", handleEscape);
     };
-  }, [state.codexInfoOpenModel, state]);
+  }, [codexInfoOpenModel, setCodexInfoOpenModel]);
 
   return {
     sortedInstructionSets,
