@@ -166,7 +166,7 @@ model CodexUsageCache {
   @@index([expiresAt])
 }
 
-model InstructionSet {
+model SkillSet {
   id          String            @id @default(cuid())
   name        String
   description String?
@@ -176,12 +176,13 @@ model InstructionSet {
   priority    Int               @default(0)
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
-  tasks       InstructionTask[]
+  tasks       SkillTask[]
 
   @@index([priority])
+  @@map("InstructionSet")
 }
 
-model InstructionTask {
+model SkillTask {
   id                      String         @id @default(cuid())
   instructionSetId        String
   text                    String
@@ -193,7 +194,8 @@ model InstructionTask {
   reasoning               String         @default("medium")
   createdAt               DateTime       @default(now())
   updatedAt               DateTime       @updatedAt
-  instructionSet          InstructionSet @relation(fields: [instructionSetId], references: [id], onDelete: Cascade)
+  instructionSet          SkillSet @relation(fields: [instructionSetId], references: [id], onDelete: Cascade)
 
   @@index([instructionSetId, priority])
+  @@map("InstructionTask")
 }

@@ -17,7 +17,7 @@ export interface ProjectEntity {
   updatedAt: string;
 }
 
-export interface InstructionSetEntity {
+export interface SkillSetEntity {
   createdAt: string;
   description: string | null;
   linkedInstructionSetIds: string[];
@@ -29,7 +29,7 @@ export interface InstructionSetEntity {
   updatedAt: string;
 }
 
-export interface InstructionTaskEntity {
+export interface SkillTaskEntity {
   createdAt: string;
   id: string;
   includePreviousContext: boolean;
@@ -42,6 +42,9 @@ export interface InstructionTaskEntity {
   text: string;
   updatedAt: string;
 }
+
+export type InstructionSetEntity = SkillSetEntity;
+export type InstructionTaskEntity = SkillTaskEntity;
 
 export interface SubprojectEntity {
   createdAt: string;
@@ -87,9 +90,11 @@ export interface ProjectTreeItem extends ProjectEntity {
   tasks: TaskEntity[];
 }
 
-export interface InstructionSetTreeItem extends InstructionSetEntity {
-  tasks: InstructionTaskEntity[];
+export interface SkillSetTreeItem extends SkillSetEntity {
+  tasks: SkillTaskEntity[];
 }
+
+export type InstructionSetTreeItem = SkillSetTreeItem;
 
 export interface SettingRecord {
   dbValue: string | null;

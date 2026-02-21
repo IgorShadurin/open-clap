@@ -221,6 +221,33 @@ test("extracts additional rate limits when API returns them as a model map", () 
   assert.equal(summaries[1]?.fiveHourUsedPercent, 15);
 });
 
+test("maps internal model identifier to known spark model", () => {
+  const payload: CodexUsagePayload = {
+    plan_type: "legacy-plan",
+    rate_limit: {
+      models: [
+        {
+          model: "codex_bengalfox",
+          modelLabel: "codex_bengalfox",
+          primary_window: {
+            used_percent: 96,
+            reset_at: 1_700_200_000,
+          },
+          secondary_window: {
+            used_percent: 99,
+            reset_at: 1_700_300_000,
+          },
+        },
+      ],
+    },
+  };
+
+  const summaries = extractCodexUsageModelSummaries(payload);
+  assert.equal(summaries.length, 1);
+  assert.equal(summaries[0]?.model, "gpt-5.3-codex-spark");
+  assert.equal(summaries[0]?.modelLabel, undefined);
+});
+
 test("extracts additional rate limits even if details embed windows directly", () => {
   const payload: CodexUsagePayload = {
     plan_type: "new-plan",

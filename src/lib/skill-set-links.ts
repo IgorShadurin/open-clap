@@ -1,10 +1,11 @@
 import type { Prisma } from "@prisma/client";
-import type { InstructionSetTreeItem } from "../../shared/contracts";
 
-const INSTRUCTION_TASK_METADATA_KIND = "instruction-task";
+import type { SkillSetTreeItem } from "../../shared/contracts";
 
-export interface InstructionTaskLinkMetadata {
-  kind: typeof INSTRUCTION_TASK_METADATA_KIND;
+const SKILL_TASK_METADATA_KIND = "instruction-task";
+
+export interface SkillTaskLinkMetadata {
+  kind: typeof SKILL_TASK_METADATA_KIND;
   instructionSetId: string;
   instructionSetName: string;
   instructionTaskId: string;
@@ -13,7 +14,7 @@ export interface InstructionTaskLinkMetadata {
   isManuallyEdited?: boolean;
 }
 
-export interface ResolvedInstructionTask {
+export interface ResolvedSkillTask {
   id: string;
   includePreviousContext: boolean;
   model: string;
@@ -56,7 +57,7 @@ function parseRawInstructionTaskMetadata(rawMetadata: unknown): unknown {
   return null;
 }
 
-export function buildInstructionTaskMetadata(input: {
+export function buildSkillTaskMetadata(input: {
   instructionSetId: string;
   instructionSetName: string;
   instructionTaskId: string;
@@ -81,7 +82,7 @@ export function buildInstructionTaskMetadata(input: {
   }
 
   return JSON.stringify({
-    kind: INSTRUCTION_TASK_METADATA_KIND,
+    kind: SKILL_TASK_METADATA_KIND,
     instructionSetId,
     instructionSetName,
     instructionTaskId,
@@ -91,7 +92,7 @@ export function buildInstructionTaskMetadata(input: {
   });
 }
 
-function asInstructionTaskLinkMetadata(raw: unknown): InstructionTaskLinkMetadata | null {
+function asSkillTaskLinkMetadata(raw: unknown): SkillTaskLinkMetadata | null {
   if (!raw || typeof raw !== "object") {
     return null;
   }
@@ -110,7 +111,7 @@ function asInstructionTaskLinkMetadata(raw: unknown): InstructionTaskLinkMetadat
     typeof data.instructionSetId === "string" &&
     typeof data.instructionTaskId === "string";
 
-  if (data.kind !== INSTRUCTION_TASK_METADATA_KIND && !hasBaseFields) {
+  if (data.kind !== SKILL_TASK_METADATA_KIND && !hasBaseFields) {
     return null;
   }
 
@@ -129,7 +130,7 @@ function asInstructionTaskLinkMetadata(raw: unknown): InstructionTaskLinkMetadat
   const isManuallyEdited = normalizeBoolean(data.isManuallyEdited);
 
   return {
-    kind: INSTRUCTION_TASK_METADATA_KIND,
+    kind: SKILL_TASK_METADATA_KIND,
     instructionSetId,
     instructionSetName,
     instructionTaskId,
@@ -139,17 +140,17 @@ function asInstructionTaskLinkMetadata(raw: unknown): InstructionTaskLinkMetadat
   };
 }
 
-export function parseInstructionTaskMetadata(
+export function parseSkillTaskMetadata(
   rawMetadata: string | Prisma.JsonValue | null | undefined,
-): InstructionTaskLinkMetadata | null {
-  return asInstructionTaskLinkMetadata(parseRawInstructionTaskMetadata(rawMetadata));
+): SkillTaskLinkMetadata | null {
+  return asSkillTaskLinkMetadata(parseRawInstructionTaskMetadata(rawMetadata));
 }
 
-export function markInstructionTaskMetadataEdited(
-  metadata: InstructionTaskLinkMetadata,
+export function markSkillTaskMetadataEdited(
+  metadata: SkillTaskLinkMetadata,
   isManuallyEdited: boolean,
 ): string {
-  return buildInstructionTaskMetadata({
+  return buildSkillTaskMetadata({
     instructionSetId: metadata.instructionSetId,
     instructionSetName: metadata.instructionSetName,
     instructionTaskId: metadata.instructionTaskId,
@@ -159,12 +160,12 @@ export function markInstructionTaskMetadataEdited(
   });
 }
 
-export function buildMetadataForResolvedInstructionTask(input: {
+export function buildMetadataForResolvedSkillTask(input: {
   composerInstructionSetId: string;
   composerInstructionSetName: string;
-  resolvedTask: ResolvedInstructionTask;
+  resolvedTask: ResolvedSkillTask;
 }): string {
-  return buildInstructionTaskMetadata({
+  return buildSkillTaskMetadata({
     instructionSetId: input.composerInstructionSetId,
     instructionSetName: input.composerInstructionSetName,
     instructionTaskId: input.resolvedTask.id,
@@ -174,21 +175,19 @@ export function buildMetadataForResolvedInstructionTask(input: {
   });
 }
 
-export function parseSourceInstructionSetId(rawMetadata: string | Prisma.JsonValue | null | undefined): string {
-  const metadata = parseInstructionTaskMetadata(rawMetadata);
+export function parseSourceSkillSetId(rawMetadata: string | Prisma.JsonValue | null | undefined): string {
+  const metadata = parseSkillTaskMetadata(rawMetadata);
   return metadata?.sourceInstructionSetId ?? "";
 }
 
-export function shouldSyncFromInstructionTask(
-  metadata: InstructionTaskLinkMetadata,
-): boolean {
-  return metadata.kind === INSTRUCTION_TASK_METADATA_KIND && metadata.isManuallyEdited !== true;
+export function shouldSyncFromSkillTask(metadata: SkillTaskLinkMetadata): boolean {
+  return metadata.kind === SKILL_TASK_METADATA_KIND && metadata.isManuallyEdited !== true;
 }
 
-export function resolveInstructionSetTasks(
-  instructionSets: readonly InstructionSetTreeItem[],
+export function resolveSkillSetTasks(
+  instructionSets: readonly SkillSetTreeItem[],
   instructionSetId: string,
-): ResolvedInstructionTask[] {
+): ResolvedSkillTask[] {
   const rootSetId = instructionSetId.trim();
   if (!rootSetId) {
     return [];
@@ -197,7 +196,7 @@ export function resolveInstructionSetTasks(
   const setById = new Map(
     instructionSets.map((instructionSet) => [instructionSet.id, instructionSet] as const),
   );
-  const resolved: ResolvedInstructionTask[] = [];
+  const resolved: ResolvedSkillTask[] = [];
   const visited = new Set<string>();
 
   const walk = (setId: string) => {
@@ -232,3 +231,15 @@ export function resolveInstructionSetTasks(
   walk(rootSetId);
   return resolved;
 }
+
+export type InstructionTaskLinkMetadata = SkillTaskLinkMetadata;
+export type ResolvedInstructionTask = ResolvedSkillTask;
+
+export {
+  buildSkillTaskMetadata as buildInstructionTaskMetadata,
+  buildMetadataForResolvedSkillTask as buildMetadataForResolvedInstructionTask,
+  parseSkillTaskMetadata as parseInstructionTaskMetadata,
+  parseSourceSkillSetId as parseSourceInstructionSetId,
+  shouldSyncFromSkillTask as shouldSyncFromInstructionTask,
+  resolveSkillSetTasks as resolveInstructionSetTasks,
+};

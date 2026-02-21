@@ -10,7 +10,7 @@ import { publishAppSync } from "./live-sync";
 import { DEFAULT_TASK_MODEL, DEFAULT_TASK_REASONING } from "./task-reasoning";
 import { normalizeUserPath, validatePathExists } from "./path-validation";
 import { prisma } from "./prisma";
-import { markInstructionTaskMetadataEdited, parseInstructionTaskMetadata } from "./instruction-set-links";
+import { markSkillTaskMetadataEdited, parseSkillTaskMetadata } from "./skill-set-links";
 
 function stringifyMetadata(value: Prisma.JsonValue | null | undefined): string | null {
   if (value === null) {
@@ -166,12 +166,12 @@ function parseMetadata(metadata: string | undefined): Prisma.InputJsonValue | un
 }
 
 function markInstructionMetadataEdited(metadata: Prisma.JsonValue | null | undefined): Prisma.InputJsonValue | undefined {
-  const parsed = parseInstructionTaskMetadata(metadata);
+  const parsed = parseSkillTaskMetadata(metadata);
   if (!parsed) {
     return undefined;
   }
 
-  return JSON.parse(markInstructionTaskMetadataEdited(parsed, true)) as Prisma.InputJsonValue;
+  return JSON.parse(markSkillTaskMetadataEdited(parsed, true)) as Prisma.InputJsonValue;
 }
 
 async function nextPriority(
@@ -567,7 +567,7 @@ async function assertInstructionSetNotAlreadyAdded({
   metadata: Prisma.InputJsonValue | undefined;
   projectId: string;
 }): Promise<void> {
-  const instructionMetadata = parseInstructionTaskMetadata(metadata);
+  const instructionMetadata = parseSkillTaskMetadata(metadata);
   if (!instructionMetadata?.instructionSetId) {
     return;
   }
@@ -581,7 +581,7 @@ async function assertInstructionSetNotAlreadyAdded({
   });
 
   const hasMatchingProjectScope = taskRows.some((taskRow) => {
-    const rowMetadata = parseInstructionTaskMetadata(taskRow.metadata);
+    const rowMetadata = parseSkillTaskMetadata(taskRow.metadata);
     if (!rowMetadata || rowMetadata.instructionSetId !== instructionMetadata.instructionSetId) {
       return false;
     }

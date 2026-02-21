@@ -8,22 +8,22 @@ import test from "node:test";
 import {
   buildInstructionTaskMetadata,
   parseInstructionTaskMetadata,
-} from "../../src/lib/instruction-set-links";
+} from "../../src/lib/skill-set-links";
 import { createTask, deleteTask, updateTask } from "../../src/lib/entities-service";
 import {
-  createInstructionTask,
   createInstructionSet,
+  createInstructionTask,
   deleteInstructionTask,
-  updateInstructionSet,
   reorderInstructionTasks,
+  updateInstructionSet,
   updateInstructionTask,
-} from "../../src/lib/instructions-service";
+} from "../../src/lib/skills-service";
 import { prisma } from "../../src/lib/prisma";
 
 async function resetDatabase(): Promise<void> {
   await prisma.task.deleteMany();
-  await prisma.instructionTask.deleteMany();
-  await prisma.instructionSet.deleteMany();
+  await prisma.skillTask.deleteMany();
+  await prisma.skillSet.deleteMany();
   await prisma.project.deleteMany();
 }
 

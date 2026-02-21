@@ -5,29 +5,29 @@ assertTestDatabaseGuard();
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { GET as listInstructionSets } from "../../src/app/api/instructions/route";
-import { POST as createInstructionSet } from "../../src/app/api/instructions/route";
-import { PATCH as updateInstructionSet } from "../../src/app/api/instructions/[instructionSetId]/route";
-import { POST as createInstructionTask } from "../../src/app/api/instructions/[instructionSetId]/tasks/route";
-import { POST as instructionTaskAction } from "../../src/app/api/instructions/tasks/[taskId]/action/route";
-import { POST as reorderInstructionTasks } from "../../src/app/api/instructions/tasks/reorder/route";
-import { POST as reorderInstructionSets } from "../../src/app/api/instructions/reorder/route";
+import { GET as listSkillSets } from "../../src/app/api/skills/route";
+import { POST as createSkillSet } from "../../src/app/api/skills/route";
+import { PATCH as updateSkillSet } from "../../src/app/api/skills/[skillSetId]/route";
+import { POST as createSkillSetTask } from "../../src/app/api/skills/[skillSetId]/tasks/route";
+import { POST as skillSetTaskAction } from "../../src/app/api/skills/tasks/[taskId]/action/route";
+import { POST as reorderSkillSetTasks } from "../../src/app/api/skills/tasks/reorder/route";
+import { POST as reorderSkillSets } from "../../src/app/api/skills/reorder/route";
 import { prisma } from "../../src/lib/prisma";
 
 async function resetDatabase(): Promise<void> {
-  await prisma.instructionTask.deleteMany();
-  await prisma.instructionSet.deleteMany();
+  await prisma.skillTask.deleteMany();
+  await prisma.skillSet.deleteMany();
 }
 
 test.after(async () => {
   await resetDatabase();
 });
 
-test("instruction sets support create/update/reorder and task actions", async () => {
+test("skill sets support create/update/reorder and task actions", async () => {
   await resetDatabase();
 
-  const firstCreateResponse = await createInstructionSet(
-    new Request("http://localhost/api/instructions", {
+  const firstCreateResponse = await createSkillSet(
+    new Request("http://localhost/api/skills", {
       body: JSON.stringify({
         description: "First set description",
         name: "First set",
@@ -39,8 +39,8 @@ test("instruction sets support create/update/reorder and task actions", async ()
   assert.equal(firstCreateResponse.status, 201);
   const firstSet = (await firstCreateResponse.json()) as { id: string };
 
-  const secondCreateResponse = await createInstructionSet(
-    new Request("http://localhost/api/instructions", {
+  const secondCreateResponse = await createSkillSet(
+    new Request("http://localhost/api/skills", {
       body: JSON.stringify({
         description: "Second set description",
         name: "Second set",
@@ -52,8 +52,8 @@ test("instruction sets support create/update/reorder and task actions", async ()
   assert.equal(secondCreateResponse.status, 201);
   const secondSet = (await secondCreateResponse.json()) as { id: string };
 
-  const updateResponse = await updateInstructionSet(
-    new Request(`http://localhost/api/instructions/${firstSet.id}`, {
+  const updateResponse = await updateSkillSet(
+    new Request(`http://localhost/api/skills/${firstSet.id}`, {
       body: JSON.stringify({
         description: "Updated description",
         mainPageTasksVisible: false,
@@ -62,11 +62,11 @@ test("instruction sets support create/update/reorder and task actions", async ()
       headers: { "Content-Type": "application/json" },
       method: "PATCH",
     }),
-    { params: Promise.resolve({ instructionSetId: firstSet.id }) },
+    { params: Promise.resolve({ skillSetId: firstSet.id }) },
   );
   assert.equal(updateResponse.status, 200);
 
-  const listResponse = await listInstructionSets();
+  const listResponse = await listSkillSets();
   assert.equal(listResponse.status, 200);
   const rows = (await listResponse.json()) as Array<{
     id: string;
@@ -76,8 +76,8 @@ test("instruction sets support create/update/reorder and task actions", async ()
   assert.ok(updatedRow);
   assert.equal(updatedRow.mainPageTasksVisible, false);
 
-  const createTaskResponse = await createInstructionTask(
-    new Request(`http://localhost/api/instructions/${firstSet.id}/tasks`, {
+  const createTaskResponse = await createSkillSetTask(
+    new Request(`http://localhost/api/skills/${firstSet.id}/tasks`, {
       body: JSON.stringify({
         includePreviousContext: true,
         model: "gpt-5.3-codex",
@@ -88,26 +88,26 @@ test("instruction sets support create/update/reorder and task actions", async ()
       headers: { "Content-Type": "application/json" },
       method: "POST",
     }),
-    { params: Promise.resolve({ instructionSetId: firstSet.id }) },
+    { params: Promise.resolve({ skillSetId: firstSet.id }) },
   );
   assert.equal(createTaskResponse.status, 201);
   const firstTask = (await createTaskResponse.json()) as { id: string };
 
-  const createSecondTaskResponse = await createInstructionTask(
-    new Request(`http://localhost/api/instructions/${firstSet.id}/tasks`, {
+  const createSecondTaskResponse = await createSkillSetTask(
+    new Request(`http://localhost/api/skills/${firstSet.id}/tasks`, {
       body: JSON.stringify({
         text: "Task two",
       }),
       headers: { "Content-Type": "application/json" },
       method: "POST",
     }),
-    { params: Promise.resolve({ instructionSetId: firstSet.id }) },
+    { params: Promise.resolve({ skillSetId: firstSet.id }) },
   );
   assert.equal(createSecondTaskResponse.status, 201);
   const secondTask = (await createSecondTaskResponse.json()) as { id: string };
 
-  const pauseResponse = await instructionTaskAction(
-    new Request(`http://localhost/api/instructions/tasks/${firstTask.id}/action`, {
+  const pauseResponse = await skillSetTaskAction(
+    new Request(`http://localhost/api/skills/tasks/${firstTask.id}/action`, {
       body: JSON.stringify({ action: "pause" }),
       headers: { "Content-Type": "application/json" },
       method: "POST",
@@ -116,16 +116,16 @@ test("instruction sets support create/update/reorder and task actions", async ()
   );
   assert.equal(pauseResponse.status, 204);
 
-  const pausedTask = await prisma.instructionTask.findUnique({
+  const pausedTask = await prisma.skillTask.findUnique({
     select: { paused: true },
     where: { id: firstTask.id },
   });
   assert.equal(pausedTask?.paused, true);
 
-  const reorderTasksResponse = await reorderInstructionTasks(
-    new Request("http://localhost/api/instructions/tasks/reorder", {
+  const reorderTasksResponse = await reorderSkillSetTasks(
+    new Request("http://localhost/api/skills/tasks/reorder", {
       body: JSON.stringify({
-        instructionSetId: firstSet.id,
+        skillSetId: firstSet.id,
         orderedIds: [secondTask.id, firstTask.id],
       }),
       headers: { "Content-Type": "application/json" },
@@ -134,7 +134,7 @@ test("instruction sets support create/update/reorder and task actions", async ()
   );
   assert.equal(reorderTasksResponse.status, 204);
 
-  const reorderedTasks = await prisma.instructionTask.findMany({
+  const reorderedTasks = await prisma.skillTask.findMany({
     orderBy: [{ priority: "asc" }],
     select: { id: true },
     where: { instructionSetId: firstSet.id },
@@ -144,8 +144,8 @@ test("instruction sets support create/update/reorder and task actions", async ()
     [secondTask.id, firstTask.id],
   );
 
-  const reorderSetsResponse = await reorderInstructionSets(
-    new Request("http://localhost/api/instructions/reorder", {
+  const reorderSetsResponse = await reorderSkillSets(
+    new Request("http://localhost/api/skills/reorder", {
       body: JSON.stringify({
         orderedIds: [secondSet.id, firstSet.id],
       }),
@@ -155,7 +155,7 @@ test("instruction sets support create/update/reorder and task actions", async ()
   );
   assert.equal(reorderSetsResponse.status, 204);
 
-  const reorderedSets = await prisma.instructionSet.findMany({
+  const reorderedSets = await prisma.skillSet.findMany({
     orderBy: [{ priority: "asc" }],
     select: { id: true },
   });

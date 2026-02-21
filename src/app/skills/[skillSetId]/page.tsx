@@ -14,9 +14,9 @@ export const metadata: Metadata = {
   ],
 };
 
-export default async function SkillSetRoutePageLegacy(props: {
-  params: Promise<{ instructionSetId: string }>;
+export default async function SkillSetRoutePage(props: {
+  params: Promise<{ skillSetId: string }>;
 }) {
-  const { instructionSetId } = await props.params;
-  return <SkillSetPage instructionSetId={instructionSetId} />;
+  const { skillSetId } = await props.params;
+  return <SkillSetPage instructionSetId={skillSetId} />;
 }

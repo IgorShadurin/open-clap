@@ -15,6 +15,6 @@ export const metadata: Metadata = {
   ],
 };
 
-export default function SkillsRoutePageLegacy() {
+export default function SkillsRoutePage() {
   return <SkillsPage />;
 }

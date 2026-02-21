@@ -6,11 +6,11 @@ import type {
   InstructionTaskEntity,
 } from "../../shared/contracts";
 import {
-  buildInstructionTaskMetadata,
-  parseInstructionTaskMetadata,
-  resolveInstructionSetTasks,
-  shouldSyncFromInstructionTask,
-} from "./instruction-set-links";
+  buildSkillTaskMetadata,
+  parseSkillTaskMetadata,
+  resolveSkillSetTasks,
+  shouldSyncFromSkillTask,
+} from "./skill-set-links";
 import { publishAppSync } from "./live-sync";
 import { prisma } from "./prisma";
 import { DEFAULT_TASK_MODEL, DEFAULT_TASK_REASONING } from "./task-reasoning";
@@ -103,8 +103,8 @@ function buildProjectTaskMetadata({
     sourceInstructionSetName: string;
   };
 }): Prisma.InputJsonValue {
-  return JSON.parse(
-    buildInstructionTaskMetadata({
+    return JSON.parse(
+      buildSkillTaskMetadata({
       instructionSetId,
       instructionSetName,
       instructionTaskId: sourceInstructionTask.id,
@@ -119,8 +119,8 @@ function buildProjectTaskMetadataForUpdate(
   link: InstructionTaskLinkMatch,
   sourceTaskId: string,
 ): Prisma.InputJsonValue {
-  return JSON.parse(
-    buildInstructionTaskMetadata({
+      return JSON.parse(
+    buildSkillTaskMetadata({
       instructionSetId: link.metadata.instructionSetId,
       instructionSetName: link.metadata.instructionSetName,
       instructionTaskId: sourceTaskId,
@@ -151,7 +151,7 @@ async function listProjectTasksLinkedToInstructionTask(
 
   return taskRows
     .map((task) => {
-      const metadata = parseInstructionTaskMetadata(task.metadata);
+    const metadata = parseSkillTaskMetadata(task.metadata);
       if (!metadata || metadata.sourceInstructionSetId !== sourceInstructionSetId) {
         return null;
       }
@@ -255,7 +255,7 @@ function applyInstructionTaskPriorityReorder(
   const allowedTaskIds = new Set(resolvedTaskIds);
   const scopeRows = [...rows]
     .filter((row) => {
-      const metadata = parseInstructionTaskMetadata(row.metadata);
+      const metadata = parseSkillTaskMetadata(row.metadata);
       return (
         metadata !== null &&
         metadata.instructionSetId === composerSetId &&
@@ -273,7 +273,7 @@ function applyInstructionTaskPriorityReorder(
 
   const availableBySourceTaskId = new Map<string, ProjectInstructionTaskRow[]>();
   for (const row of scopeRows) {
-    const metadata = parseInstructionTaskMetadata(row.metadata);
+    const metadata = parseSkillTaskMetadata(row.metadata);
     if (!metadata) {
       continue;
     }
@@ -354,7 +354,7 @@ function toInstructionTaskEntity(input: {
 }
 
 async function nextInstructionSetPriority(): Promise<number> {
-  const latest = await prisma.instructionSet.findFirst({
+  const latest = await prisma.skillSet.findFirst({
     orderBy: [{ priority: "desc" }],
     select: { priority: true },
   });
@@ -363,7 +363,7 @@ async function nextInstructionSetPriority(): Promise<number> {
 }
 
 async function nextInstructionTaskPriority(instructionSetId: string): Promise<number> {
-  const latest = await prisma.instructionTask.findFirst({
+  const latest = await prisma.skillTask.findFirst({
     orderBy: [{ priority: "desc" }],
     select: { priority: true },
     where: { instructionSetId },
@@ -373,7 +373,7 @@ async function nextInstructionTaskPriority(instructionSetId: string): Promise<nu
 }
 
 export async function listInstructionSetsTree(): Promise<InstructionSetTreeItem[]> {
-  const sets = await prisma.instructionSet.findMany({
+    const sets = await prisma.skillSet.findMany({
     include: {
       tasks: {
         orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
@@ -391,7 +391,7 @@ export async function listInstructionSetsTree(): Promise<InstructionSetTreeItem[
 export async function getInstructionSetById(
   instructionSetId: string,
 ): Promise<InstructionSetTreeItem | null> {
-  const set = await prisma.instructionSet.findUnique({
+  const set = await prisma.skillSet.findUnique({
     include: {
       tasks: {
         orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
@@ -413,7 +413,7 @@ export async function getInstructionSetById(
 export async function getInstructionSetImageInfoById(
   instructionSetId: string,
 ): Promise<{ imagePath: string | null } | null> {
-  const set = await prisma.instructionSet.findUnique({
+  const set = await prisma.skillSet.findUnique({
     select: {
       imagePath: true,
     },
@@ -432,7 +432,7 @@ export async function createInstructionSet(input: {
   name: string;
 }): Promise<InstructionSetEntity> {
   const priority = await nextInstructionSetPriority();
-  const set = await prisma.instructionSet.create({
+  const set = await prisma.skillSet.create({
     data: {
       description: input.description?.trim() || null,
       name: input.name.trim(),
@@ -453,7 +453,7 @@ export async function updateInstructionSet(
     name: string;
   }>,
 ): Promise<InstructionSetEntity> {
-  const data: Prisma.InstructionSetUpdateInput = {
+  const data: Prisma.SkillSetUpdateInput = {
     description:
       input.description === undefined ? undefined : input.description?.trim() || null,
     mainPageTasksVisible: input.mainPageTasksVisible,
@@ -471,7 +471,7 @@ export async function updateInstructionSet(
     data.metadata = { linkedInstructionSetIds: normalized };
   }
 
-  const set = await prisma.instructionSet.update({
+  const set = await prisma.skillSet.update({
     data,
     where: { id: instructionSetId },
   });
@@ -484,7 +484,7 @@ export async function setInstructionSetImagePath(
   instructionSetId: string,
   imagePath: string | null,
 ): Promise<InstructionSetEntity> {
-  const set = await prisma.instructionSet.update({
+  const set = await prisma.skillSet.update({
     data: {
       imagePath,
     },
@@ -496,7 +496,7 @@ export async function setInstructionSetImagePath(
 }
 
 export async function deleteInstructionSet(instructionSetId: string): Promise<void> {
-  await prisma.instructionSet.delete({
+  await prisma.skillSet.delete({
     where: { id: instructionSetId },
   });
   publishAppSync("instructions.deleted");
@@ -505,7 +505,7 @@ export async function deleteInstructionSet(instructionSetId: string): Promise<vo
 export async function reorderInstructionSets(orderedIds: string[]): Promise<void> {
   await prisma.$transaction(
     orderedIds.map((instructionSetId, index) =>
-      prisma.instructionSet.update({
+      prisma.skillSet.update({
         data: { priority: index },
         where: { id: instructionSetId },
       }),
@@ -524,7 +524,7 @@ export async function createInstructionTask(input: {
   text: string;
 }): Promise<InstructionTaskEntity> {
   const priority = await nextInstructionTaskPriority(input.instructionSetId);
-  const task = await prisma.instructionTask.create({
+  const task = await prisma.skillTask.create({
     data: {
       includePreviousContext: input.includePreviousContext ?? false,
       instructionSetId: input.instructionSetId,
@@ -535,7 +535,7 @@ export async function createInstructionTask(input: {
       text: input.text.trim(),
     },
   });
-  const sourceSet = await prisma.instructionSet.findUnique({
+    const sourceSet = await prisma.skillSet.findUnique({
     select: { name: true },
     where: { id: task.instructionSetId },
   });
@@ -590,7 +590,7 @@ export async function updateInstructionTask(
     text: string;
   }>,
 ): Promise<InstructionTaskEntity> {
-  const task = await prisma.instructionTask.update({
+  const task = await prisma.skillTask.update({
     data: {
       includePreviousContext: input.includePreviousContext,
       model: input.model?.trim(),
@@ -608,7 +608,7 @@ export async function updateInstructionTask(
   );
   const syncTargets = taskLinks.filter(
     (link) =>
-      shouldSyncFromInstructionTask(link.metadata) &&
+      shouldSyncFromSkillTask(link.metadata) &&
       !link.editLocked &&
       link.status !== TaskStatus.in_progress,
   );
@@ -632,7 +632,7 @@ export async function updateInstructionTask(
 }
 
 export async function deleteInstructionTask(instructionTaskId: string): Promise<void> {
-  const existingTask = await prisma.instructionTask.findUnique({
+  const existingTask = await prisma.skillTask.findUnique({
     select: { id: true, instructionSetId: true },
     where: { id: instructionTaskId },
   });
@@ -641,7 +641,7 @@ export async function deleteInstructionTask(instructionTaskId: string): Promise<
     return;
   }
 
-  await prisma.instructionTask.delete({
+  await prisma.skillTask.delete({
     where: { id: instructionTaskId },
   });
 
@@ -652,7 +652,7 @@ export async function deleteInstructionTask(instructionTaskId: string): Promise<
 
   const removeTargets = taskLinks.filter(
     (link) =>
-      shouldSyncFromInstructionTask(link.metadata) &&
+      shouldSyncFromSkillTask(link.metadata) &&
       !link.editLocked &&
       link.status !== TaskStatus.in_progress,
   );
@@ -677,7 +677,7 @@ export async function reorderInstructionTasks(
 ): Promise<void> {
   await prisma.$transaction(
     orderedIds.map((instructionTaskId, index) =>
-      prisma.instructionTask.update({
+      prisma.skillTask.update({
         data: { priority: index },
         where: {
           id: instructionTaskId,
@@ -695,7 +695,7 @@ export async function reorderInstructionTasks(
   const resolvedTasksByComposer = new Map<string, string[]>(
     affectedComposerIds.map((composerSetId) => [
       composerSetId,
-      resolveInstructionSetTasks(sets, composerSetId).map((task) => task.id),
+      resolveSkillSetTasks(sets, composerSetId).map((task) => task.id),
     ]),
   );
 
@@ -723,10 +723,10 @@ export async function reorderInstructionTasks(
     });
 
     const affectedTaskRows = taskRows.filter((row) => {
-      const metadata = parseInstructionTaskMetadata(row.metadata);
+      const metadata = parseSkillTaskMetadata(row.metadata);
       return (
         metadata !== null &&
-        shouldSyncFromInstructionTask(metadata) &&
+        shouldSyncFromSkillTask(metadata) &&
         resolvedTasksByComposer.has(metadata.instructionSetId) &&
         affectedSourceTaskIds.has(metadata.instructionTaskId)
       );
@@ -734,7 +734,7 @@ export async function reorderInstructionTasks(
 
     const rowsByScope = new Map<string, ProjectInstructionTaskRow[]>();
     for (const row of affectedTaskRows) {
-      const metadata = parseInstructionTaskMetadata(row.metadata);
+      const metadata = parseSkillTaskMetadata(row.metadata);
       if (!metadata) {
         continue;
       }
@@ -801,7 +801,7 @@ export async function setInstructionTaskAction(
   }
 
   if (action === "pause") {
-    await prisma.instructionTask.update({
+    await prisma.skillTask.update({
       data: { paused: true },
       where: { id: instructionTaskId },
     });
@@ -809,9 +809,27 @@ export async function setInstructionTaskAction(
     return;
   }
 
-  await prisma.instructionTask.update({
+  await prisma.skillTask.update({
     data: { paused: false },
     where: { id: instructionTaskId },
   });
   publishAppSync("instructions.task_resumed");
 }
+
+export {
+  createInstructionSet as createSkillSet,
+  createInstructionTask as createSkillSetTask,
+  deleteInstructionSet as deleteSkillSet,
+  deleteInstructionTask as deleteSkillSetTask,
+  getInstructionSetById as getSkillSetById,
+  listInstructionSetsTree as listSkillSetTree,
+  listInstructionSetsTree as listSkillSetsTree,
+  reorderInstructionSets as reorderSkillSets,
+  reorderInstructionTasks as reorderSkillSetTasks,
+  setInstructionSetImagePath as setSkillSetImagePath,
+  getInstructionSetImageInfoById as getSkillSetImageInfoById,
+  setInstructionTaskAction as setSkillTaskAction,
+  setInstructionTaskAction as setSkillSetTaskAction,
+  updateInstructionSet as updateSkillSet,
+  updateInstructionTask as updateSkillSetTask,
+};

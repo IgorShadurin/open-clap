@@ -7,17 +7,17 @@ import {
   resolveImageFileExtension,
 } from "./project-uploaded-icon";
 
-function getInstructionSetImagesDirectory(): string {
+function getSkillSetImagesDirectory(): string {
   return path.join(process.cwd(), "data", "instruction-set-images", "sets");
 }
 
-function sanitizeInstructionSetId(instructionSetId: string): string {
+function sanitizeSkillSetId(instructionSetId: string): string {
   const normalized = instructionSetId.trim().replace(/[^a-zA-Z0-9_-]/g, "-");
-  return normalized.length > 0 ? normalized : "instruction-set";
+  return normalized.length > 0 ? normalized : "skill-set";
 }
 
 function isPathWithinInstructionSetImagesDirectory(filePath: string): boolean {
-  const instructionSetImagesDirectory = getInstructionSetImagesDirectory();
+  const instructionSetImagesDirectory = getSkillSetImagesDirectory();
   const resolvedDirectory = path.resolve(instructionSetImagesDirectory);
   const resolvedFilePath = path.resolve(filePath);
   return (
@@ -32,8 +32,8 @@ export async function saveUploadedInstructionSetImage(
   instructionSetId: string,
   file: File,
 ): Promise<string> {
-  const instructionSetImagesDirectory = getInstructionSetImagesDirectory();
-  const safeInstructionSetId = sanitizeInstructionSetId(instructionSetId);
+  const instructionSetImagesDirectory = getSkillSetImagesDirectory();
+  const safeInstructionSetId = sanitizeSkillSetId(instructionSetId);
   const extension = resolveImageFileExtension(file);
 
   await fs.mkdir(instructionSetImagesDirectory, { recursive: true });
@@ -70,3 +70,6 @@ export async function removeUploadedInstructionSetImage(
   await fs.rm(imagePath, { force: true });
   return true;
 }
+
+export const getInstructionSetImagesDirectory = getSkillSetImagesDirectory;
+export const sanitizeInstructionSetId = sanitizeSkillSetId;

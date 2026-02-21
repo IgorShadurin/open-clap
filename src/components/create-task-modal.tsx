@@ -5,13 +5,12 @@ import { useEffect, useState } from "react";
 
 import {
   DEFAULT_TASK_MODEL,
-  TASK_MODEL_OPTIONS,
   DEFAULT_TASK_REASONING,
-  TASK_REASONING_OPTIONS,
 } from "@/lib/task-reasoning";
 import { cn } from "@/lib/utils";
 
 import { requestJson } from "./app-dashboard-helpers";
+import { TaskModelSelect, TaskReasoningSelect } from "./task-select-dropdowns";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import {
@@ -24,7 +23,6 @@ import {
 } from "./ui/dialog";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
-import { Select } from "./ui/select";
 import { Textarea } from "./ui/textarea";
 
 const INCLUDE_CONTEXT_HELP =
@@ -109,27 +107,8 @@ export function CreateTaskModal({
             value={taskText}
           />
           <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-            <Select onChange={(event) => setTaskModel(event.target.value)} value={taskModel}>
-              {!TASK_MODEL_OPTIONS.some((option) => option.value === taskModel) &&
-              taskModel.trim().length > 0 ? (
-                <option value={taskModel}>{taskModel}</option>
-              ) : null}
-              {TASK_MODEL_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </Select>
-            <Select
-              onChange={(event) => setTaskReasoning(event.target.value)}
-              value={taskReasoning}
-            >
-              {TASK_REASONING_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </Select>
+            <TaskModelSelect onValueChange={setTaskModel} value={taskModel} />
+            <TaskReasoningSelect onValueChange={setTaskReasoning} value={taskReasoning} />
           </div>
           <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
             <div className="flex items-center gap-2 rounded border border-black/10 px-2">

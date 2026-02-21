@@ -165,6 +165,32 @@ function toCanonicalModelIdentifier(value: string | null): string {
     .replace(/-+/g, "-");
 }
 
+const USAGE_MODEL_CANONICAL_ALIASES: Readonly<Record<string, string>> = {
+  "codex-bengalfox": "gpt-5.3-codex-spark",
+};
+
+function normalizeUsageModelName(value: string | null | undefined): string {
+  const canonical = toCanonicalModelIdentifier(value);
+  if (!canonical) {
+    return "";
+  }
+
+  return USAGE_MODEL_CANONICAL_ALIASES[canonical] ?? canonical;
+}
+
+function normalizeUsageModelLabel(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (trimmed.includes("_")) {
+    return undefined;
+  }
+
+  return trimmed;
+}
+
 function parseRateLimitSummarySource(value: unknown): UnknownRecord | null {
   const record = asRecord(value);
   if (!record) {
@@ -204,6 +230,8 @@ function parseModelUsageSummary(
     return null;
   }
 
+  const normalizedModel = normalizeUsageModelName(modelName);
+
   const weeklyUsedPercent = readPercent(
     modelData.weeklyUsedPercent ??
       modelData.secondary_used_percent ??
@@ -214,8 +242,10 @@ function parseModelUsageSummary(
     allowed: Boolean(modelData.allowed ?? defaultModelMeta.allowed),
     fiveHourResetAt: primaryWindow?.resetAt ?? "n/a",
     fiveHourUsedPercent: primaryWindow?.usedPercent ?? 0,
-    model: modelName,
-    modelLabel: readString(modelData.modelLabel) ?? readString(modelData.model_name_label),
+    model: normalizedModel,
+    modelLabel: normalizeUsageModelLabel(
+      readString(modelData.modelLabel) ?? readString(modelData.model_name_label),
+    ),
     planType: readString(modelData.plan_type) ?? defaultModelMeta.planType,
     weeklyResetAt: secondaryWindow?.resetAt ?? "n/a",
     weeklyUsedPercent: weeklyUsedPercent ?? (secondaryWindow ? secondaryWindow.usedPercent : null),

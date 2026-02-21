@@ -17,3 +17,55 @@ export const TASK_REASONING_OPTIONS = [
   { label: "high", value: "high" },
   { label: "xhigh", value: "xhigh" },
 ] as const;
+
+export type TaskModelOption = (typeof TASK_MODEL_OPTIONS)[number];
+export type TaskReasoningOption = (typeof TASK_REASONING_OPTIONS)[number];
+
+const TASK_MODEL_EMOJIS: Readonly<Record<TaskModelOption["value"], string>> = {
+  "gpt-5.3-codex-spark": "✨",
+  "gpt-5.3-codex": "🚀",
+  "gpt-5.2-codex": "🧠",
+  "gpt-5.1-codex-max": "🏎️",
+  "gpt-5.2": "🧰",
+  "gpt-5.1-codex-mini": "🧩",
+} as const;
+
+const TASK_REASONING_EMOJIS: Readonly<Record<TaskReasoningOption["value"], string>> = {
+  minimal: "🧾",
+  low: "🐢",
+  medium: "⚙️",
+  high: "🔥",
+  xhigh: "🤯",
+} as const;
+
+export const TASK_MODEL_OPTIONS_WITH_EMOJI = TASK_MODEL_OPTIONS.map((option) => ({
+  ...option,
+  displayLabel: `${TASK_MODEL_EMOJIS[option.value]} ${option.label}`,
+})) as ReadonlyArray<
+  Readonly<{ value: string; label: string; displayLabel: string }>
+>;
+
+export const TASK_REASONING_OPTIONS_WITH_EMOJI = TASK_REASONING_OPTIONS.map((option) => ({
+  ...option,
+  displayLabel: `${TASK_REASONING_EMOJIS[option.value]} ${option.label}`,
+})) as ReadonlyArray<
+  Readonly<{ value: string; label: string; displayLabel: string }>
+>;
+
+export function getTaskModelDisplayLabel(value: string): string {
+  const option = TASK_MODEL_OPTIONS_WITH_EMOJI.find((item) => item.value === value);
+  if (option) {
+    return option.displayLabel;
+  }
+
+  return value;
+}
+
+export function getTaskReasoningDisplayLabel(value: string): string {
+  const option = TASK_REASONING_OPTIONS_WITH_EMOJI.find((item) => item.value === value);
+  if (option) {
+    return option.displayLabel;
+  }
+
+  return value;
+}

@@ -6,7 +6,7 @@ import {
   buildInstructionTaskMetadata,
   parseInstructionTaskMetadata,
   resolveInstructionSetTasks,
-} from "../../src/lib/instruction-set-links";
+} from "../../src/lib/skill-set-links";
 
 test("build and parse instruction task metadata", () => {
   const encoded = buildInstructionTaskMetadata({

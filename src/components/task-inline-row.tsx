@@ -77,17 +77,19 @@ export function TaskInlineRow({
       : "Pause task";
   const canOpen = Boolean(onOpen) && !disableText;
   const compactSpacingClass = compactTextOffset && !showPauseControl ? " ml-2" : "";
+  const rowLockedClass = locked ? "border-black/5 bg-zinc-50 opacity-70" : "";
+  const gripClassName = locked ? "mt-2 h-4 w-4 text-zinc-300" : "mt-2 h-4 w-4 text-zinc-400";
 
   return (
     <div
-      className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-start gap-2 rounded-md border border-black/10 bg-white px-3 py-2"
+      className={`grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-start gap-2 rounded-md border border-black/10 bg-white px-3 py-2 ${rowLockedClass}`}
       draggable={draggable}
       onDragEnd={onContainerDragEnd}
       onDragOver={onContainerDragOver}
       onDragStart={onContainerDragStart}
       onDrop={onContainerDrop}
     >
-      {showGrip ? <GripVertical className="mt-2 h-4 w-4 text-zinc-400" /> : <span className="w-4" />}
+      {showGrip ? <GripVertical className={gripClassName} /> : <span className="w-4" />}
 
       {canStop ? (
         <Button
