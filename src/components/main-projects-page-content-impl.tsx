@@ -462,16 +462,46 @@ export function MainProjectsPage() {
 
   const shouldBlockContainerDragStart = (event: {
     target: EventTarget | null;
+    currentTarget: EventTarget | null;
+    nativeEvent: Event;
   }): boolean => {
-    if (!(event.target instanceof Element)) {
-      return false;
+    const interactiveSelector =
+      "input, textarea, select, button, a, [contenteditable], [role='textbox'], [role='button'], [contenteditable='true'], [contenteditable='']";
+
+    const isInteractiveElement = (candidate: Element | null): boolean => {
+      if (!candidate) {
+        return false;
+      }
+
+      return Boolean(candidate.closest(interactiveSelector));
+    };
+
+    if (isInteractiveElement(event.target as Element | null)) {
+      return true;
     }
 
-    return Boolean(
-      event.target.closest(
-        "input, textarea, select, button, a, [contenteditable=''], [contenteditable='true']",
-      ),
-    );
+    const nativeEvent = event.nativeEvent as DragEvent & {
+      composedPath?: () => EventTarget[];
+    };
+    const nativePath = typeof nativeEvent.composedPath === "function" ? nativeEvent.composedPath() : [];
+    for (const item of nativePath) {
+      if (item instanceof Element && isInteractiveElement(item)) {
+        return true;
+      }
+    }
+
+    if (event.currentTarget instanceof HTMLElement) {
+      const activeElement = document.activeElement;
+      if (
+        activeElement instanceof Element &&
+        event.currentTarget.contains(activeElement) &&
+        isInteractiveElement(activeElement)
+      ) {
+        return true;
+      }
+    }
+
+    return false;
   };
 
   const bumpProjectIconCacheBust = (projectId: string) => {

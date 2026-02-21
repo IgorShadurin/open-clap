@@ -168,10 +168,12 @@ export function TaskQuickAdd({
     preventDefault: () => void;
     stopPropagation: () => void;
   }) => {
-    event.preventDefault();
-    if (stopPropagation) {
-      event.stopPropagation();
+    if (!stopPropagation) {
+      return;
     }
+
+    event.preventDefault();
+    event.stopPropagation();
   };
 
   const setFileDropActive = (active: boolean) => {
@@ -437,6 +439,7 @@ export function TaskQuickAdd({
       onDragEnter={handleFileDragEnter}
       onDragLeave={handleFileDragLeave}
       onDragOver={handleFileDragOver}
+      onDragStart={preventDragStart}
       onDrop={(event) => {
         void handleFileDrop(event);
       }}
@@ -454,9 +457,13 @@ export function TaskQuickAdd({
             fileDropReady ? "border-emerald-400 bg-emerald-50 ring-1 ring-emerald-200" : undefined,
           )}
           disabled={disableTextInput}
+          draggable={false}
           data-task-file-drop="true"
           onChange={(event) => setText(event.target.value)}
+          onDragStart={preventDragStart}
           onFocus={() => setSettingsExpanded(true)}
+          onMouseDown={stopEventPropagation}
+          onPointerDown={stopEventPropagation}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           ref={inputRef}
@@ -512,6 +519,10 @@ export function TaskQuickAdd({
             className="h-9 text-sm"
             disabled={!includeContext}
             min={0}
+            draggable={false}
+            onDragStart={preventDragStart}
+            onMouseDown={stopEventPropagation}
+            onPointerDown={stopEventPropagation}
             onChange={(event) => handleContextCountChange(event.target.value)}
             onFocus={() => setSettingsExpanded(true)}
             placeholder="Messages count"
