@@ -1,22 +1,22 @@
 import { NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import path from "node:path";
+import type { Prisma } from "@prisma/client";
 
 import type { ApiErrorShape } from "../../../../../shared/contracts";
 import { createApiError } from "../../../../lib/api-error";
-import {
-  DEFAULT_CODEX_USAGE_TIMEOUT_MS,
-  fetchCodexUsageForAuthFile,
-  formatUsageReset,
-  resolveAuthFilePath,
-} from "../../../../lib/codex-usage";
+import * as codexUsage from "../../../../lib/codex-usage";
+import { prisma } from "../../../../lib/prisma";
 import { getSettingValue } from "../../../../lib/settings-store";
 
 export const runtime = "nodejs";
+const CODEX_USAGE_CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface CodexUsageRequestBody {
   authFile?: string;
   authFiles?: string[];
   endpoint?: string;
+  forceRefresh?: boolean;
   proxy?: string;
   timeoutMs?: number;
 }
@@ -42,6 +42,10 @@ interface CodexUsageResponseBody {
   results: CodexUsageResultItem[];
 }
 
+interface CodexUsageCachePayload {
+  results?: CodexUsageResultItem[];
+}
+
 function normalizeAuthFiles(body: CodexUsageRequestBody): string[] {
   const list: string[] = [];
   if (typeof body.authFile === "string" && body.authFile.trim().length > 0) {
@@ -57,6 +61,34 @@ function normalizeAuthFiles(body: CodexUsageRequestBody): string[] {
   }
 
   return [...new Set(list)];
+}
+
+function buildCacheKey(input: {
+  authFiles: string[];
+  endpoint?: string;
+  proxy?: string;
+}): string {
+  const payload = {
+    authFiles: input.authFiles,
+    endpoint: input.endpoint ?? null,
+    proxy: input.proxy ?? null,
+  };
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+function parseCachedPayload(input: Prisma.JsonValue): CodexUsageResponseBody | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return null;
+  }
+
+  const payload = input as CodexUsageCachePayload;
+  if (!Array.isArray(payload.results)) {
+    return null;
+  }
+
+  return {
+    results: payload.results,
+  };
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -126,17 +158,43 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  const timeoutMs = body.timeoutMs ?? DEFAULT_CODEX_USAGE_TIMEOUT_MS;
+  const timeoutMs = body.timeoutMs ?? codexUsage.DEFAULT_CODEX_USAGE_TIMEOUT_MS;
   const endpoint =
     typeof body.endpoint === "string" && body.endpoint.trim().length > 0
       ? body.endpoint.trim()
       : undefined;
 
-  const results: CodexUsageResultItem[] = [];
-  for (const authFile of authFiles) {
+  const resolvedAuthFiles = authFiles.map((authFile) => {
     try {
-      const result = await fetchCodexUsageForAuthFile({
-        authFilePath: authFile,
+      return codexUsage.resolveAuthFilePath(authFile);
+    } catch {
+      return path.resolve(authFile);
+    }
+  });
+
+  const cacheKey = buildCacheKey({
+    authFiles: resolvedAuthFiles,
+    endpoint,
+    proxy: proxy.length > 0 ? proxy : undefined,
+  });
+
+  if (!body.forceRefresh) {
+    const cached = await prisma.codexUsageCache.findUnique({
+      where: { cacheKey },
+    });
+    if (cached && cached.expiresAt.getTime() > Date.now()) {
+      const payload = parseCachedPayload(cached.payload as Prisma.JsonValue);
+      if (payload) {
+        return NextResponse.json<CodexUsageResponseBody>(payload, { status: 200 });
+      }
+    }
+  }
+
+  const results: CodexUsageResultItem[] = [];
+  for (const authFilePath of resolvedAuthFiles) {
+    try {
+      const result = await codexUsage.fetchCodexUsageForAuthFile({
+        authFilePath,
         endpoint,
         proxyUrl: proxy.length > 0 ? proxy : undefined,
         timeoutMs,
@@ -152,31 +210,50 @@ export async function POST(request: Request): Promise<NextResponse> {
         usage: {
           accountId: result.usage.account_id,
           allowed: Boolean(result.usage.rate_limit?.allowed),
-          fiveHourResetAt: formatUsageReset(primary?.reset_at),
+          fiveHourResetAt: codexUsage.formatUsageReset(primary?.reset_at),
           fiveHourUsedPercent: primary?.used_percent ?? 0,
           planType: result.usage.plan_type,
-          weeklyResetAt: formatUsageReset(secondary?.reset_at),
+          weeklyResetAt: codexUsage.formatUsageReset(secondary?.reset_at),
           weeklyUsedPercent:
             secondary?.used_percent === undefined ? null : secondary.used_percent,
         },
       });
     } catch (error) {
       results.push({
-        authFile:
-          typeof authFile === "string"
-            ? (() => {
-                try {
-                  return resolveAuthFilePath(authFile);
-                } catch {
-                  return path.resolve(authFile);
-                }
-              })()
-            : String(authFile),
+        authFile: authFilePath,
         error: error instanceof Error ? error.message : String(error),
         ok: false,
       });
     }
   }
 
-  return NextResponse.json<CodexUsageResponseBody>({ results }, { status: 200 });
+  const responseBody: CodexUsageResponseBody = { results };
+
+  if (results.some((item) => item.ok)) {
+    const now = Date.now();
+    const expiresAt = new Date(now + CODEX_USAGE_CACHE_TTL_MS);
+    await prisma.$transaction([
+      prisma.codexUsageCache.upsert({
+        create: {
+          cacheKey,
+          expiresAt,
+          payload: responseBody as unknown as Prisma.InputJsonValue,
+        },
+        update: {
+          expiresAt,
+          payload: responseBody as unknown as Prisma.InputJsonValue,
+        },
+        where: { cacheKey },
+      }),
+      prisma.codexUsageCache.deleteMany({
+        where: {
+          expiresAt: {
+            lte: new Date(now),
+          },
+        },
+      }),
+    ]);
+  }
+
+  return NextResponse.json<CodexUsageResponseBody>(responseBody, { status: 200 });
 }

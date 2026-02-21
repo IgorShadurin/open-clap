@@ -17,6 +17,31 @@ export interface ProjectEntity {
   updatedAt: string;
 }
 
+export interface InstructionSetEntity {
+  createdAt: string;
+  description: string | null;
+  id: string;
+  imagePath: string | null;
+  mainPageTasksVisible: boolean;
+  name: string;
+  priority: number;
+  updatedAt: string;
+}
+
+export interface InstructionTaskEntity {
+  createdAt: string;
+  id: string;
+  includePreviousContext: boolean;
+  instructionSetId: string;
+  model: string;
+  paused: boolean;
+  previousContextMessages: number;
+  priority: number;
+  reasoning: string;
+  text: string;
+  updatedAt: string;
+}
+
 export interface SubprojectEntity {
   createdAt: string;
   id: string;
@@ -58,6 +83,10 @@ export interface TaskResponseEntity {
 export interface ProjectTreeItem extends ProjectEntity {
   subprojects: SubprojectEntity[];
   tasks: TaskEntity[];
+}
+
+export interface InstructionSetTreeItem extends InstructionSetEntity {
+  tasks: InstructionTaskEntity[];
 }
 
 export interface SettingRecord {

@@ -4,6 +4,7 @@ import Link from "next/link";
 import {
   ArrowDown,
   ArrowUp,
+  BookText,
   ChevronDown,
   ChevronUp,
   EllipsisVertical,
@@ -33,6 +34,12 @@ import {
   TASK_REASONING_OPTIONS,
 } from "@/lib/task-reasoning";
 import { clearTaskFormPreferences } from "@/lib/task-form-preferences";
+import {
+  createDraggableContainerHandlers,
+  moveItemInList,
+  preventControlDragStart,
+  stopDragPropagation,
+} from "../lib/drag-drop";
 
 import type {
   ProjectEntity,
@@ -49,6 +56,7 @@ import {
   SubprojectQuickAdd,
   type SubprojectQuickAddPayload,
 } from "./subproject-quick-add";
+import { TaskInlineRow } from "./task-inline-row";
 import { TaskQuickAdd, type TaskQuickAddPayload } from "./task-quick-add";
 import { usePreventUnhandledFileDrop } from "./use-prevent-unhandled-file-drop";
 import { useRealtimeSync } from "./use-realtime-sync";
@@ -299,10 +307,6 @@ export function MainProjectsPage() {
   const projectIconInputRef = useRef<HTMLInputElement | null>(null);
   const codexInfoRef = useRef<HTMLDivElement | null>(null);
 
-  const stopDragPropagation = (event: { stopPropagation: () => void }) => {
-    event.stopPropagation();
-  };
-
   const shouldBlockContainerDragStart = (event: {
     target: EventTarget | null;
   }): boolean => {
@@ -315,14 +319,6 @@ export function MainProjectsPage() {
         "input, textarea, select, button, a, [contenteditable=''], [contenteditable='true']",
       ),
     );
-  };
-
-  const preventControlDragStart = (event: {
-    preventDefault: () => void;
-    stopPropagation: () => void;
-  }) => {
-    event.preventDefault();
-    event.stopPropagation();
   };
 
   const bumpProjectIconCacheBust = (projectId: string) => {
@@ -622,15 +618,10 @@ export function MainProjectsPage() {
     }
 
     const currentOrder = projects.map((project) => project.id);
-    const fromIndex = currentOrder.findIndex((id) => id === draggingProjectId);
-    const toIndex = currentOrder.findIndex((id) => id === targetProjectId);
-    if (fromIndex < 0 || toIndex < 0) {
+    const reordered = moveItemInList(currentOrder, draggingProjectId, targetProjectId);
+    if (!reordered) {
       return;
     }
-
-    const reordered = currentOrder.slice();
-    const [removed] = reordered.splice(fromIndex, 1);
-    reordered.splice(toIndex, 0, removed);
 
     try {
       await requestJson("/api/projects/reorder", {
@@ -945,15 +936,10 @@ export function MainProjectsPage() {
     }
 
     const currentOrder = project.subprojects.map((subproject) => subproject.id);
-    const fromIndex = currentOrder.findIndex((id) => id === draggingSubproject.subprojectId);
-    const toIndex = currentOrder.findIndex((id) => id === targetSubprojectId);
-    if (fromIndex < 0 || toIndex < 0) {
+    const reordered = moveItemInList(currentOrder, draggingSubproject.subprojectId, targetSubprojectId);
+    if (!reordered) {
       return;
     }
-
-    const reordered = currentOrder.slice();
-    const [removed] = reordered.splice(fromIndex, 1);
-    reordered.splice(toIndex, 0, removed);
 
     try {
       await requestJson("/api/subprojects/reorder", {
@@ -986,15 +972,10 @@ export function MainProjectsPage() {
     const currentOrder = project.tasks
       .filter((task) => !isFinishedTask(task))
       .map((task) => task.id);
-    const fromIndex = currentOrder.findIndex((id) => id === draggingProjectTask.taskId);
-    const toIndex = currentOrder.findIndex((id) => id === targetTaskId);
-    if (fromIndex < 0 || toIndex < 0) {
+    const reordered = moveItemInList(currentOrder, draggingProjectTask.taskId, targetTaskId);
+    if (!reordered) {
       return;
     }
-
-    const reordered = currentOrder.slice();
-    const [removed] = reordered.splice(fromIndex, 1);
-    reordered.splice(toIndex, 0, removed);
 
     try {
       await requestJson("/api/tasks/reorder", {
@@ -1207,12 +1188,20 @@ export function MainProjectsPage() {
                 </div>
               </div>
             </div>
-            <Button asChild type="button" variant="outline">
-              <Link href="/settings">
-                <Settings className="h-4 w-4" />
-                <span className="sr-only">Settings</span>
-              </Link>
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button asChild type="button" variant="outline">
+                <Link href="/instructions">
+                  <BookText className="h-4 w-4" />
+                  <span className="sr-only">Instructions</span>
+                </Link>
+              </Button>
+              <Button asChild type="button" variant="outline">
+                <Link href="/settings">
+                  <Settings className="h-4 w-4" />
+                  <span className="sr-only">Settings</span>
+                </Link>
+              </Button>
+            </div>
           </div>
         </div>
 
@@ -1876,111 +1865,43 @@ export function MainProjectsPage() {
                                         const taskLocked = !canEditTask(task);
 
                                         return (
-                                          <div
-                                            className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-start gap-2 rounded-md border border-black/10 bg-white px-3 py-2"
+                                          <TaskInlineRow
+                                            deleteAriaLabel={`Remove task ${task.text}`}
+                                            deleteDisabled={taskLocked}
+                                            deleteTitle={
+                                              taskLocked
+                                                ? "Task is currently executing and cannot be changed"
+                                                : `Remove task ${task.text}`
+                                            }
+                                            disableText={taskLocked}
+                                            inProgress={task.status === "in_progress"}
                                             key={task.id}
-                                          >
-                                            <GripVertical className="mt-2 h-4 w-4 text-zinc-400" />
-                                            {task.status === "in_progress" ? (
-                                              <Button
-                                                aria-label="Stop task"
-                                                className="h-8 w-8 rounded-full border-orange-200 p-0 text-orange-700 hover:bg-orange-50"
-                                                draggable={false}
-                                                onDragStart={preventControlDragStart}
-                                                onMouseDown={stopDragPropagation}
-                                                onPointerDown={stopDragPropagation}
-                                                onClick={() =>
-                                                  setStopTaskTarget({
-                                                    id: task.id,
-                                                    text: task.text,
-                                                  })
-                                                }
-                                                size="sm"
-                                                title="Stop task"
-                                                type="button"
-                                                variant="outline"
-                                              >
-                                                <Square className="h-4 w-4" />
-                                                <span className="sr-only">Stop task</span>
-                                              </Button>
-                                            ) : (
-                                              <Button
-                                                aria-label={task.paused ? "Resume task" : "Pause task"}
-                                                className={`h-8 w-8 rounded-full p-0 ${
-                                                  task.paused
-                                                    ? "border-amber-300 text-amber-700 hover:bg-amber-50"
-                                                    : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-                                                }`}
-                                                disabled={taskLocked}
-                                                draggable={false}
-                                                onDragStart={preventControlDragStart}
-                                                onMouseDown={stopDragPropagation}
-                                                onPointerDown={stopDragPropagation}
-                                                onClick={() => void handleProjectTaskPauseToggle(task)}
-                                                size="sm"
-                                                title={
-                                                  taskLocked
-                                                    ? "Task is currently executing and cannot be changed"
-                                                    : task.paused
-                                                      ? "Resume task"
-                                                      : "Pause task"
-                                                }
-                                                type="button"
-                                                variant="outline"
-                                              >
-                                                {task.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
-                                                <span className="sr-only">
-                                                  {task.paused ? "Resume task" : "Pause task"}
-                                                </span>
-                                              </Button>
-                                            )}
-                                            <button
-                                              className={`min-w-0 break-words pt-1 text-left text-sm leading-relaxed ${
-                                                taskLocked
-                                                  ? "cursor-not-allowed text-zinc-500"
-                                                  : "cursor-pointer hover:underline"
-                                              }`}
-                                              disabled={taskLocked}
-                                              draggable={false}
-                                              onClick={() => openTaskDetails(project, task)}
-                                              onMouseDown={stopDragPropagation}
-                                              onPointerDown={stopDragPropagation}
-                                              title={
-                                                taskLocked
-                                                  ? "Task is currently executing and cannot be edited"
-                                                  : "Edit task"
-                                              }
-                                              type="button"
-                                            >
-                                              {task.text}
-                                            </button>
-                                            <Button
-                                              aria-label={`Remove task ${task.text}`}
-                                              className="h-8 w-8 self-start rounded-full border-black/15 p-0 text-black/70 hover:bg-black/5 hover:text-black"
-                                              disabled={taskLocked}
-                                              draggable={false}
-                                              onDragStart={preventControlDragStart}
-                                              onMouseDown={stopDragPropagation}
-                                              onPointerDown={stopDragPropagation}
-                                              onClick={() =>
-                                                setDeleteTaskTarget({
-                                                  id: task.id,
-                                                  text: task.text,
-                                                })
-                                              }
-                                              size="sm"
-                                              title={
-                                                taskLocked
-                                                  ? "Task is currently executing and cannot be changed"
-                                                  : `Remove task ${task.text}`
-                                              }
-                                              type="button"
-                                              variant="outline"
-                                            >
-                                              <X className="h-4 w-4" />
-                                              <span className="sr-only">Remove task</span>
-                                            </Button>
-                                          </div>
+                                            locked={taskLocked}
+                                            onDelete={() =>
+                                              setDeleteTaskTarget({
+                                                id: task.id,
+                                                text: task.text,
+                                              })
+                                            }
+                                            onOpen={() => openTaskDetails(project, task)}
+                                            onPauseToggle={() => void handleProjectTaskPauseToggle(task)}
+                                            onStop={() =>
+                                              setStopTaskTarget({
+                                                id: task.id,
+                                                text: task.text,
+                                              })
+                                            }
+                                            onControlDragStart={preventControlDragStart}
+                                            onControlMouseDown={stopDragPropagation}
+                                            onControlPointerDown={stopDragPropagation}
+                                            paused={task.paused}
+                                            text={task.text}
+                                            textActionTitle={
+                                              taskLocked
+                                                ? "Task is currently executing and cannot be edited"
+                                                : "Edit task"
+                                            }
+                                          />
                                         );
                                       })
                                     )}
@@ -2039,130 +1960,52 @@ export function MainProjectsPage() {
                             const taskLocked = !canEditTask(task);
 
                             return (
-                              <div
-                                className="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-start gap-2 rounded-md border border-black/10 bg-white px-3 py-2"
+                              <TaskInlineRow
+                                deleteAriaLabel={`Remove task ${task.text}`}
+                                deleteDisabled={taskLocked}
+                                deleteTitle={
+                                  taskLocked
+                                    ? "Task is currently executing and cannot be changed"
+                                    : `Remove task ${task.text}`
+                                }
+                                disableText={taskLocked}
                                 draggable={!taskLocked}
+                                inProgress={task.status === "in_progress"}
                                 key={task.id}
-                                onDragEnd={() => setDraggingProjectTask(null)}
-                                onDragOver={(event) => {
-                                  if (!taskLocked) {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                  }
-                                }}
-                                onDragStart={(event) => {
-                                  if (!taskLocked) {
-                                    event.stopPropagation();
+                                locked={taskLocked}
+                                {...createDraggableContainerHandlers({
+                                  enabled: !taskLocked,
+                                  onDragEnd: () => setDraggingProjectTask(null),
+                                  onDragStart: () => {
                                     setDraggingProjectTask({ projectId: project.id, taskId: task.id });
-                                  }
-                                }}
-                                onDrop={(event) => {
-                                  if (!taskLocked) {
-                                    event.preventDefault();
-                                    event.stopPropagation();
-                                    void handleProjectTaskDrop(project.id, task.id);
-                                  }
-                                }}
-                              >
-                                <GripVertical className="mt-2 h-4 w-4 text-zinc-400" />
-                                {task.status === "in_progress" ? (
-                                  <Button
-                                    aria-label="Stop task"
-                                    className="h-8 w-8 rounded-full border-orange-200 p-0 text-orange-700 hover:bg-orange-50"
-                                    draggable={false}
-                                    onDragStart={preventControlDragStart}
-                                    onMouseDown={stopDragPropagation}
-                                    onPointerDown={stopDragPropagation}
-                                    onClick={() =>
-                                      setStopTaskTarget({
-                                        id: task.id,
-                                        text: task.text,
-                                      })
-                                    }
-                                    size="sm"
-                                    title="Stop task"
-                                    type="button"
-                                    variant="outline"
-                                  >
-                                    <Square className="h-4 w-4" />
-                                    <span className="sr-only">Stop task</span>
-                                  </Button>
-                                ) : (
-                                  <Button
-                                    aria-label={task.paused ? "Resume task" : "Pause task"}
-                                    className={`h-8 w-8 rounded-full p-0 ${
-                                      task.paused
-                                        ? "border-amber-300 text-amber-700 hover:bg-amber-50"
-                                        : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-                                    }`}
-                                    disabled={taskLocked}
-                                    draggable={false}
-                                    onDragStart={preventControlDragStart}
-                                    onMouseDown={stopDragPropagation}
-                                    onPointerDown={stopDragPropagation}
-                                    onClick={() => void handleProjectTaskPauseToggle(task)}
-                                    size="sm"
-                                    title={
-                                      taskLocked
-                                        ? "Task is currently executing and cannot be changed"
-                                        : task.paused
-                                          ? "Resume task"
-                                          : "Pause task"
-                                    }
-                                    type="button"
-                                    variant="outline"
-                                  >
-                                    {task.paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
-                                    <span className="sr-only">{task.paused ? "Resume task" : "Pause task"}</span>
-                                  </Button>
-                                )}
-                                <button
-                                  className={`min-w-0 break-words pt-1 text-left text-sm leading-relaxed ${
-                                    taskLocked
-                                      ? "cursor-not-allowed text-zinc-500"
-                                      : "cursor-pointer hover:underline"
-                                  }`}
-                                  disabled={taskLocked}
-                                  draggable={false}
-                                  onClick={() => openTaskDetails(project, task)}
-                                  onMouseDown={stopDragPropagation}
-                                  onPointerDown={stopDragPropagation}
-                                  title={
-                                    taskLocked
-                                      ? "Task is currently executing and cannot be edited"
-                                      : "Edit task"
-                                  }
-                                  type="button"
-                                >
-                                  {task.text}
-                                </button>
-                                <Button
-                                  aria-label={`Remove task ${task.text}`}
-                                  className="h-8 w-8 self-start rounded-full border-black/15 p-0 text-black/70 hover:bg-black/5 hover:text-black"
-                                  disabled={taskLocked}
-                                  draggable={false}
-                                  onDragStart={preventControlDragStart}
-                                  onMouseDown={stopDragPropagation}
-                                  onPointerDown={stopDragPropagation}
-                                  onClick={() =>
-                                    setDeleteTaskTarget({
-                                      id: task.id,
-                                      text: task.text,
-                                    })
-                                  }
-                                  size="sm"
-                                  title={
-                                    taskLocked
-                                      ? "Task is currently executing and cannot be changed"
-                                      : `Remove task ${task.text}`
-                                  }
-                                  type="button"
-                                  variant="outline"
-                                >
-                                  <X className="h-4 w-4" />
-                                  <span className="sr-only">Remove task</span>
-                                </Button>
-                              </div>
+                                  },
+                                  onDrop: () => void handleProjectTaskDrop(project.id, task.id),
+                                })}
+                                onDelete={() =>
+                                  setDeleteTaskTarget({
+                                    id: task.id,
+                                    text: task.text,
+                                  })
+                                }
+                                onOpen={() => openTaskDetails(project, task)}
+                                onPauseToggle={() => void handleProjectTaskPauseToggle(task)}
+                                onStop={() =>
+                                  setStopTaskTarget({
+                                    id: task.id,
+                                    text: task.text,
+                                  })
+                                }
+                                onControlDragStart={preventControlDragStart}
+                                onControlMouseDown={stopDragPropagation}
+                                onControlPointerDown={stopDragPropagation}
+                                paused={task.paused}
+                                text={task.text}
+                                textActionTitle={
+                                  taskLocked
+                                    ? "Task is currently executing and cannot be edited"
+                                    : "Edit task"
+                                }
+                              />
                             );
                           })
                         )}

@@ -1,12 +1,12 @@
 "use client";
 
-import Link from "next/link";
-import { Hand, Save, Settings } from "lucide-react";
+import { Save, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import type { SettingRecord } from "../../shared/contracts";
 import { requestJson } from "./app-dashboard-helpers";
+import { OpenClapHeader } from "./openclap-header";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import {
@@ -140,7 +140,7 @@ export function SettingsPage() {
 
   const checkUsageAfterSettingsChange = useCallback(async () => {
     const response = await requestJson<CodexUsageApiResponse>("/api/codex/usage", {
-      body: JSON.stringify({}),
+      body: JSON.stringify({ forceRefresh: true }),
       headers: { "Content-Type": "application/json" },
       method: "POST",
     });
@@ -225,15 +225,7 @@ export function SettingsPage() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-zinc-100 p-4 md:p-8">
       <div className="mx-auto w-full max-w-6xl space-y-6">
-        <div>
-          <Link
-            className="inline-flex items-center gap-2 text-xl font-semibold transition-opacity hover:opacity-80"
-            href="/"
-          >
-            <Hand className="h-5 w-5" />
-            OpenClap
-          </Link>
-        </div>
+        <OpenClapHeader />
 
         {!hasLoadedOnce && loading ? (
           <Card className="animate-pulse">

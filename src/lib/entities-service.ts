@@ -7,7 +7,7 @@ import type {
   TaskEntity,
 } from "../../shared/contracts";
 import { publishAppSync } from "./live-sync";
-import { DEFAULT_TASK_REASONING } from "./task-reasoning";
+import { DEFAULT_TASK_MODEL, DEFAULT_TASK_REASONING } from "./task-reasoning";
 import { normalizeUserPath, validatePathExists } from "./path-validation";
 import { prisma } from "./prisma";
 
@@ -566,7 +566,7 @@ export async function createTask(input: {
   const task = await prisma.task.create({
     data: {
       includePreviousContext: input.includePreviousContext ?? false,
-      model: input.model ?? "gpt-5.3-codex",
+      model: input.model ?? DEFAULT_TASK_MODEL,
       previousContextMessages: input.previousContextMessages ?? 0,
       priority,
       projectId: input.projectId,
