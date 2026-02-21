@@ -6,6 +6,7 @@ import type {
   InstructionTaskEntity,
 } from "../../shared/contracts";
 import {
+  type SkillTaskLinkMetadata,
   buildSkillTaskMetadata,
   parseSkillTaskMetadata,
   resolveSkillSetTasks,
@@ -61,14 +62,7 @@ function normalizeLinkedInstructionSetIds(
 interface InstructionTaskLinkMatch {
   editLocked: boolean;
   id: string;
-  metadata: {
-    instructionSetId: string;
-    instructionSetName: string;
-    instructionTaskId: string;
-    sourceInstructionSetId: string;
-    sourceInstructionSetName: string;
-    isManuallyEdited?: boolean;
-  };
+  metadata: SkillTaskLinkMetadata;
   projectId: string;
   status: TaskStatus;
   subprojectId: string | null;
@@ -149,30 +143,31 @@ async function listProjectTasksLinkedToInstructionTask(
     },
   });
 
-  return taskRows
-    .map((task) => {
+  const matches: InstructionTaskLinkMatch[] = [];
+  for (const task of taskRows) {
     const metadata = parseSkillTaskMetadata(task.metadata);
-      if (!metadata || metadata.sourceInstructionSetId !== sourceInstructionSetId) {
-        return null;
-      }
+    if (!metadata || metadata.sourceInstructionSetId !== sourceInstructionSetId) {
+      continue;
+    }
 
-      if (
-        typeof sourceInstructionTaskId === "string" &&
-        metadata.instructionTaskId !== sourceInstructionTaskId
-      ) {
-        return null;
-      }
+    if (
+      typeof sourceInstructionTaskId === "string" &&
+      metadata.instructionTaskId !== sourceInstructionTaskId
+    ) {
+      continue;
+    }
 
-      return {
-        editLocked: task.editLocked,
-        id: task.id,
-        metadata,
-        projectId: task.projectId,
-        status: task.status,
-        subprojectId: task.subprojectId,
-      };
-    })
-    .filter((item): item is InstructionTaskLinkMatch => item !== null);
+    matches.push({
+      editLocked: task.editLocked,
+      id: task.id,
+      metadata,
+      projectId: task.projectId,
+      status: task.status,
+      subprojectId: task.subprojectId,
+    });
+  }
+
+  return matches;
 }
 
 function listProjectTaskCopyScopesForSourceSet(

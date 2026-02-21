@@ -131,7 +131,7 @@ function readWindow(source: UnknownRecord, keys: readonly string[]): UsageWindow
 
     const usedPercent = readPercent(windowRecord.used_percent) ?? 0;
     const resetAt = formatUsageReset(
-      parseNumeric(windowRecord.reset_at) as number | null | undefined,
+      parseNumeric(windowRecord.reset_at) ?? undefined,
     );
 
     return {
@@ -153,7 +153,7 @@ function normalizeModelSummary(summary: CodexUsageModelSummary): CodexUsageModel
   };
 }
 
-function toCanonicalModelIdentifier(value: string | null): string {
+function toCanonicalModelIdentifier(value: string | null | undefined): string {
   if (!value) {
     return "";
   }

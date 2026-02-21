@@ -7,8 +7,9 @@ import type {
   ApiErrorShape,
   CodexUsageApiResponse,
   CodexUsageApiResult,
+  CodexUsageModelSummary,
 } from "../../../../../shared/contracts";
-import type { CodexUsageModelSummary, CodexUsagePayload } from "../../../../lib/codex-usage";
+import type { CodexUsagePayload } from "../../../../lib/codex-usage";
 import { createApiError } from "../../../../lib/api-error";
 import * as codexUsage from "../../../../lib/codex-usage";
 import { prisma } from "../../../../lib/prisma";
@@ -27,7 +28,7 @@ interface CodexUsageRequestBody {
 }
 
 interface CodexUsageCachePayload {
-  results?: CodexUsageApiResult[];
+  results: CodexUsageApiResult[];
 }
 
 function normalizeAuthFiles(body: CodexUsageRequestBody): string[] {
@@ -65,12 +66,12 @@ function parseCachedPayload(input: Prisma.JsonValue): CodexUsageApiResponse | nu
     return null;
   }
 
-  const payload = input as CodexUsageCachePayload;
+  const payload = input as Partial<CodexUsageCachePayload>;
   if (!Array.isArray(payload.results)) {
     return null;
   }
 
-  return payload;
+  return { results: payload.results };
 }
 
 function buildLegacyUsageFromRateLimit(

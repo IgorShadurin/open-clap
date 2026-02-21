@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { SettingsPage } from "@/components/settings-page";
+import { SettingsPage } from "@/components/settings-page/settings-page";
 
 export const metadata: Metadata = {
   title: "Settings",

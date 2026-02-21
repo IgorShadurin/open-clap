@@ -9,7 +9,7 @@ import {
   buildProjectAvatar,
   getProjectAvatarPalette,
   getProjectInitials,
-} from "../../src/components/project-avatar";
+} from "../../src/components/task-controls/project-avatar";
 
 test("getProjectInitials uses first letters from first two words", () => {
   assert.equal(getProjectInitials("alpha beta gamma"), "AB");

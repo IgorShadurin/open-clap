@@ -9,7 +9,7 @@ import {
   buildTaskScopeHref,
   canEditTask,
   extractApiErrorMessage,
-} from "../../src/components/app-dashboard-helpers";
+} from "../../src/components/app-dashboard/helpers";
 
 test("canEditTask disables editing when task is locked or in progress", () => {
   assert.equal(canEditTask({ editLocked: false, status: "created" }), true);

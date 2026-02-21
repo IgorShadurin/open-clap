@@ -17,6 +17,7 @@ This project is a local-first Codex orchestration system for managing projects, 
    - After feature tests pass, run the full test suite.
 7. Tasks that are currently executing must be locked from edits in UI/API behavior.
 8. Keep all source files under 400 lines. If a file would exceed 400 lines, split it into smaller files by extracting logic into dedicated `components/` and `helpers/` modules.
+9. File naming convention for grouped components: when placing files under a component-specific directory, use short, non-redundant names (for example `content.tsx`, `content-impl.tsx`, `page.tsx`) rather than repeating the directory name in each filename.
 
 ## Architecture Direction
 

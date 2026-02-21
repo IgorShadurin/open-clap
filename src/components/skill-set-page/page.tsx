@@ -1,0 +1,1 @@
+export { SkillSetPage } from "./content";

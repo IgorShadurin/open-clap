@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { MainProjectsPage } from "@/components/main-projects-page";
+import { MainProjectsPage } from "@/components/main-projects-page/content-impl";
 
 export const metadata: Metadata = {
   title: "Project Navigator",

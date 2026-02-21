@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { ProjectTasksPage } from "@/components/project-tasks-page";
+import { ProjectTasksPage } from "@/components/project-tasks-page/page";
 
 export const metadata: Metadata = {
   title: "Tasks",

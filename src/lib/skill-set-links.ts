@@ -141,7 +141,7 @@ function asSkillTaskLinkMetadata(raw: unknown): SkillTaskLinkMetadata | null {
 }
 
 export function parseSkillTaskMetadata(
-  rawMetadata: string | Prisma.JsonValue | null | undefined,
+  rawMetadata: string | Prisma.JsonValue | Prisma.InputJsonValue | null | undefined,
 ): SkillTaskLinkMetadata | null {
   return asSkillTaskLinkMetadata(parseRawInstructionTaskMetadata(rawMetadata));
 }

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { SkillSetPage } from "@/components/skill-set-page";
+import { SkillSetPage } from "@/components/skill-set-page/page";
 
 export const metadata: Metadata = {
   title: "Skill Tasks",
