@@ -28,6 +28,7 @@ import {
 import { requestJson } from "./app-dashboard-helpers";
 import { OpenClapHeader } from "./openclap-header";
 import { buildProjectAvatar } from "./project-avatar";
+import { TaskDeleteConfirmationDialog } from "./task-delete-confirmation-dialog";
 import { TaskInlineRow } from "./task-inline-row";
 import { TaskQuickAdd, type TaskQuickAddPayload } from "./task-quick-add";
 import { useRealtimeSync } from "./use-realtime-sync";
@@ -61,6 +62,10 @@ export function InstructionsPage() {
   const [editingSetId, setEditingSetId] = useState<string | null>(null);
   const [editingSetName, setEditingSetName] = useState("");
   const [editingSetSubmitting, setEditingSetSubmitting] = useState(false);
+  const [deleteTaskTarget, setDeleteTaskTarget] = useState<{
+    id: string;
+    text: string;
+  } | null>(null);
   const [imageLoadErrors, setImageLoadErrors] = useState<Record<string, boolean>>({});
   const [imageCacheBustBySetId, setImageCacheBustBySetId] = useState<Record<string, number>>({});
   const [openSetImageMenuId, setOpenSetImageMenuId] = useState<string | null>(null);
@@ -360,6 +365,21 @@ export function InstructionsPage() {
       toast.success("Instruction set deleted");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to delete instruction set");
+    }
+  };
+
+  const handleInstructionTaskDelete = async () => {
+    if (!deleteTaskTarget) {
+      return;
+    }
+
+    try {
+      await handleInstructionTaskAction(deleteTaskTarget.id, "remove");
+      toast.success("Instruction task deleted");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Failed to delete instruction task");
+    } finally {
+      setDeleteTaskTarget(null);
     }
   };
 
@@ -678,7 +698,7 @@ export function InstructionsPage() {
                                   inProgress={false}
                                   key={task.id}
                                   allowPause={false}
-                                  onDelete={() => void handleInstructionTaskAction(task.id, "remove")}
+                                  onDelete={() => setDeleteTaskTarget({ id: task.id, text: task.text })}
                                   onPauseToggle={() =>
                                     void handleInstructionTaskAction(task.id, task.paused ? "resume" : "pause")
                                   }
@@ -729,6 +749,14 @@ export function InstructionsPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <TaskDeleteConfirmationDialog
+          onCancel={() => setDeleteTaskTarget(null)}
+          onConfirm={() => void handleInstructionTaskDelete()}
+          open={Boolean(deleteTaskTarget)}
+          taskText={deleteTaskTarget?.text ?? ""}
+          title="Delete instruction task"
+        />
 
         <Dialog
           onOpenChange={(open) => {

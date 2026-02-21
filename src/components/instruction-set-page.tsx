@@ -15,6 +15,7 @@ import {
 import { TASK_MODEL_OPTIONS, TASK_REASONING_OPTIONS } from "@/lib/task-reasoning";
 import { requestJson } from "./app-dashboard-helpers";
 import { OpenClapHeader } from "./openclap-header";
+import { TaskDeleteConfirmationDialog } from "./task-delete-confirmation-dialog";
 import { TaskInlineRow } from "./task-inline-row";
 import { TaskQuickAdd, type TaskQuickAddPayload } from "./task-quick-add";
 import { usePreventUnhandledFileDrop } from "./use-prevent-unhandled-file-drop";
@@ -177,6 +178,13 @@ export function InstructionSetPage({ instructionSetId }: InstructionSetPageProps
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to update task");
     }
+  };
+
+  const handleConfirmDeleteTask = async () => {
+    if (!deleteTaskTarget) {
+      return;
+    }
+    await setTaskAction(deleteTaskTarget.id, "remove");
   };
 
   const handleTaskDrop = async (targetTaskId: string) => {
@@ -395,32 +403,13 @@ export function InstructionSetPage({ instructionSetId }: InstructionSetPageProps
           </Card>
         ) : null}
 
-        <Dialog
-          onOpenChange={(open) => (!open ? setDeleteTaskTarget(null) : undefined)}
+        <TaskDeleteConfirmationDialog
+          onCancel={() => setDeleteTaskTarget(null)}
+          onConfirm={() => void handleConfirmDeleteTask()}
           open={Boolean(deleteTaskTarget)}
-        >
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Delete instruction task</DialogTitle>
-              <DialogDescription>
-                Delete task <strong>{truncateText(deleteTaskTarget?.text ?? "", 100)}</strong>? This
-                action cannot be undone.
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button onClick={() => setDeleteTaskTarget(null)} type="button" variant="outline">
-                Cancel
-              </Button>
-              <Button
-                className="bg-red-600 text-white hover:bg-red-700"
-                onClick={() => void setTaskAction(deleteTaskTarget!.id, "remove")}
-                type="button"
-              >
-                Delete
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+          taskText={truncateText(deleteTaskTarget?.text ?? "", 100)}
+          title="Delete instruction task"
+        />
 
         <Dialog
           onOpenChange={(open) => (!open ? setEditTaskTarget(null) : undefined)}
