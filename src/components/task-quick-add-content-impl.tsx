@@ -25,6 +25,7 @@ import { TaskModelSelect, TaskReasoningSelect } from "./task-select-dropdowns";
 import { Button } from "./ui/button";
 import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
+import { Textarea } from "./ui/textarea";
 
 export interface TaskQuickAddPayload {
   contextCount: number;
@@ -75,7 +76,7 @@ export function TaskQuickAdd({
   const [submitting, setSubmitting] = useState(false);
   const [dropError, setDropError] = useState<string | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileDropDepthRef = useRef(0);
 
   useEffect(() => {
@@ -383,8 +384,26 @@ export function TaskQuickAdd({
     }
 
     setText((current) => appendDroppedPaths(current, attachmentPaths));
-    inputRef.current?.focus();
+    textInputRef.current?.focus();
   };
+
+  const adjustTextAreaHeight = () => {
+    const textarea = textInputRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = "auto";
+    const maxHeight = 192;
+    const minHeight = 36;
+    const nextHeight = Math.max(minHeight, textarea.scrollHeight);
+    textarea.style.height = `${Math.min(maxHeight, nextHeight)}px`;
+    textarea.style.overflowY = nextHeight > maxHeight ? "auto" : "hidden";
+  };
+
+  useEffect(() => {
+    adjustTextAreaHeight();
+  }, [text]);
 
   const handleSubmit = async () => {
     const trimmedText = text.trim();
@@ -407,7 +426,7 @@ export function TaskQuickAdd({
     }
   };
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (disableTextInput) {
       return;
     }
@@ -451,22 +470,24 @@ export function TaskQuickAdd({
       }}
     >
       <div className="flex items-center gap-2">
-        <Input
+        <Textarea
           className={cn(
-            "h-9 text-sm",
+            "h-auto min-h-9 max-h-48 w-full resize-none text-sm",
             fileDropReady ? "border-emerald-400 bg-emerald-50 ring-1 ring-emerald-200" : undefined,
           )}
+          rows={1}
           disabled={disableTextInput}
           draggable={false}
           data-task-file-drop="true"
           onChange={(event) => setText(event.target.value)}
           onDragStart={preventDragStart}
           onFocus={() => setSettingsExpanded(true)}
+          onInput={adjustTextAreaHeight}
           onMouseDown={stopEventPropagation}
           onPointerDown={stopEventPropagation}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
-          ref={inputRef}
+          ref={textInputRef}
           value={text}
         />
         {rightAddon}
