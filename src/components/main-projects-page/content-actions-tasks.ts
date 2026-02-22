@@ -174,6 +174,10 @@ export const useMainProjectsPageTaskActions = ({
     subprojectId: string | null = null,
     sourceInstructionSetId = "",
   ) => {
+    const shouldIncludeContext = payload.contextCount > 0;
+    const duplicateCount = Number.isFinite(payload.duplicateCount)
+      ? Math.max(1, Math.floor(payload.duplicateCount))
+      : 1;
     const trimmedSourceInstructionSetId = sourceInstructionSetId.trim();
     const selectedInstructionSet = state.instructionSets.find(
       (instructionSet) => instructionSet.id === trimmedSourceInstructionSetId,
@@ -233,9 +237,10 @@ export const useMainProjectsPageTaskActions = ({
     try {
       await requestJson("/api/tasks", {
         body: JSON.stringify({
-          includePreviousContext: payload.includeContext,
+          duplicateCount,
+          includePreviousContext: shouldIncludeContext,
           model: payload.model.trim() || DEFAULT_TASK_MODEL,
-          previousContextMessages: payload.includeContext ? payload.contextCount : 0,
+          previousContextMessages: shouldIncludeContext ? payload.contextCount : 0,
           projectId: project.id,
           reasoning: payload.reasoning.trim() || DEFAULT_TASK_REASONING,
           subprojectId,
@@ -245,7 +250,7 @@ export const useMainProjectsPageTaskActions = ({
         method: "POST",
       });
       await loadProjects();
-      toast.success("Task created");
+      toast.success(`Task created (${duplicateCount}x)`);
     } catch (error) {
       state.setErrorMessage(error instanceof Error ? error.message : "Failed to create task");
     }

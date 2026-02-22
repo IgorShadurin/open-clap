@@ -411,9 +411,13 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
       return;
     }
 
+    const duplicateCount = Number.isFinite(payload.duplicateCount)
+      ? Math.max(1, Math.floor(payload.duplicateCount))
+      : 1;
     try {
       await requestJson("/api/tasks", {
         body: JSON.stringify({
+          duplicateCount,
           includePreviousContext: payload.includeContext,
           model: payload.model.trim() || DEFAULT_TASK_MODEL,
           previousContextMessages: payload.includeContext ? payload.contextCount : 0,
@@ -426,7 +430,7 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
         method: "POST",
       });
       await loadTree();
-      toast.success("Task created");
+      toast.success(`Task created (${duplicateCount}x)`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to create task");
     }

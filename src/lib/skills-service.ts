@@ -514,64 +514,74 @@ export async function createInstructionTask(input: {
   includePreviousContext?: boolean;
   instructionSetId: string;
   model?: string;
+  duplicateCount?: number;
   previousContextMessages?: number;
   reasoning?: string;
   text: string;
 }): Promise<InstructionTaskEntity> {
-  const priority = await nextInstructionTaskPriority(input.instructionSetId);
-  const task = await prisma.skillTask.create({
-    data: {
-      includePreviousContext: input.includePreviousContext ?? false,
-      instructionSetId: input.instructionSetId,
-      model: input.model?.trim() || DEFAULT_TASK_MODEL,
-      previousContextMessages: input.previousContextMessages ?? 0,
-      priority,
-      reasoning: input.reasoning?.trim() || DEFAULT_TASK_REASONING,
-      text: input.text.trim(),
-    },
-  });
-    const sourceSet = await prisma.skillSet.findUnique({
+  const duplicateCount = Number.isFinite(input.duplicateCount)
+    ? Math.max(1, Math.floor(input.duplicateCount))
+    : 1;
+  const sourceSet = await prisma.skillSet.findUnique({
     select: { name: true },
-    where: { id: task.instructionSetId },
+    where: { id: input.instructionSetId },
   });
-  const sourceSetName = sourceSet?.name?.trim() ?? task.instructionSetId;
+  const sourceSetName = sourceSet?.name?.trim() ?? input.instructionSetId;
 
   const existingProjectTaskLinks = await listProjectTasksLinkedToInstructionTask(
-    task.instructionSetId,
+    input.instructionSetId,
   );
   const copyScopes = listProjectTaskCopyScopesForSourceSet(
     existingProjectTaskLinks,
-    task.instructionSetId,
+    input.instructionSetId,
   );
 
-  for (const scope of copyScopes) {
-    await prisma.task.create({
+  const createdTasks: InstructionTaskEntity[] = [];
+  for (let index = 0; index < duplicateCount; index += 1) {
+    const priority = await nextInstructionTaskPriority(input.instructionSetId);
+    const task = await prisma.skillTask.create({
       data: {
-        includePreviousContext: task.includePreviousContext,
-        metadata: buildProjectTaskMetadata({
-          instructionSetId: scope.instructionSetId,
-          instructionSetName: scope.instructionSetName,
-          sourceInstructionTask: {
-            id: task.id,
-            sourceInstructionSetId: task.instructionSetId,
-            sourceInstructionSetName: sourceSetName,
-          },
-        }),
-        model: task.model,
-        paused: false,
-        previousContextMessages: task.previousContextMessages,
-        priority: await getNextTaskPriority(scope.projectId, scope.subprojectId),
-        projectId: scope.projectId,
-        reasoning: task.reasoning,
-        status: "created",
-        subprojectId: scope.subprojectId,
-        text: task.text,
+        includePreviousContext: input.includePreviousContext ?? false,
+        instructionSetId: input.instructionSetId,
+        model: input.model?.trim() || DEFAULT_TASK_MODEL,
+        previousContextMessages: input.previousContextMessages ?? 0,
+        priority,
+        reasoning: input.reasoning?.trim() || DEFAULT_TASK_REASONING,
+        text: input.text.trim(),
       },
     });
+
+    for (const scope of copyScopes) {
+      await prisma.task.create({
+        data: {
+          includePreviousContext: task.includePreviousContext,
+          metadata: buildProjectTaskMetadata({
+            instructionSetId: scope.instructionSetId,
+            instructionSetName: scope.instructionSetName,
+            sourceInstructionTask: {
+              id: task.id,
+              sourceInstructionSetId: task.instructionSetId,
+              sourceInstructionSetName: sourceSetName,
+            },
+          }),
+          model: task.model,
+          paused: false,
+          previousContextMessages: task.previousContextMessages,
+          priority: await getNextTaskPriority(scope.projectId, scope.subprojectId),
+          projectId: scope.projectId,
+          reasoning: task.reasoning,
+          status: "created",
+          subprojectId: scope.subprojectId,
+          text: task.text,
+        },
+      });
+    }
+
+    createdTasks.push(toInstructionTaskEntity(task));
   }
 
   publishAppSync("instructions.task_created");
-  return toInstructionTaskEntity(task);
+  return createdTasks[0]!;
 }
 
 export async function updateInstructionTask(

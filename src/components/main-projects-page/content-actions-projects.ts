@@ -44,6 +44,7 @@ export interface MainProjectsPageProjectActions {
   }) => Promise<void>;
   handleSubprojectDrop: (projectId: string, targetSubprojectId: string) => Promise<void>;
   handleConfirmProjectDelete: () => Promise<void>;
+  handleConfirmProjectTasksDelete: () => Promise<void>;
 }
 
 export const useMainProjectsPageProjectActions = ({
@@ -323,6 +324,22 @@ export const useMainProjectsPageProjectActions = ({
     }
   };
 
+  const handleConfirmProjectTasksDelete = async () => {
+    if (!state.clearProjectTasksTarget) {
+      return;
+    }
+
+    const { id, name, taskCount } = state.clearProjectTasksTarget;
+    try {
+      await requestJson(`/api/projects/${id}/tasks`, { method: "DELETE" });
+      state.setClearProjectTasksTarget(null);
+      await loadProjects();
+      toast.success(taskCount > 0 ? `Cleared ${taskCount} tasks from ${name}` : "No tasks to clear");
+    } catch (error) {
+      state.setErrorMessage(error instanceof Error ? error.message : "Failed to clear project tasks");
+    }
+  };
+
   return {
     handleQuickProjectCreate,
     startProjectNameEdit,
@@ -341,5 +358,6 @@ export const useMainProjectsPageProjectActions = ({
     handleProjectSubprojectsListToggle,
     handleSubprojectDrop,
     handleConfirmProjectDelete,
+    handleConfirmProjectTasksDelete,
   };
 };

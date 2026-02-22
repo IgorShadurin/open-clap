@@ -9,6 +9,7 @@ interface CreateTaskBody {
   model?: string;
   metadata?: string;
   previousContextMessages?: number;
+  duplicateCount?: number;
   projectId: string;
   reasoning?: string;
   subprojectId?: string | null;
@@ -54,8 +55,15 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
+  const duplicateCount = Number.isFinite(body.duplicateCount)
+    ? Math.max(1, Math.floor(body.duplicateCount))
+    : 1;
+
   try {
-      const task = await createTask(body);
+    const task = await createTask({
+      ...body,
+      duplicateCount,
+    });
     return NextResponse.json<TaskEntity>(task, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

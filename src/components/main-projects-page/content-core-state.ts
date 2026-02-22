@@ -38,6 +38,8 @@ export interface MainProjectsPageCoreState {
   setDeleteProjectTarget: Setter<{ id: string; name: string } | null>;
   openProjectMenuId: string | null;
   setOpenProjectMenuId: Setter<string | null>;
+  clearProjectTasksTarget: { id: string; name: string; taskCount: number } | null;
+  setClearProjectTasksTarget: Setter<{ id: string; name: string; taskCount: number } | null>;
   openProjectIconMenuId: string | null;
   setOpenProjectIconMenuId: Setter<string | null>;
   projectIconPickerProjectId: string | null;
@@ -148,6 +150,9 @@ export const useMainProjectsPageCoreState = (): MainProjectsPageCoreState => {
     null,
   );
   const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
+  const [clearProjectTasksTarget, setClearProjectTasksTarget] = useState<
+    { id: string; name: string; taskCount: number } | null
+  >(null);
   const [openProjectIconMenuId, setOpenProjectIconMenuId] = useState<string | null>(null);
   const [projectIconPickerProjectId, setProjectIconPickerProjectId] = useState<string | null>(
     null,
@@ -238,6 +243,8 @@ export const useMainProjectsPageCoreState = (): MainProjectsPageCoreState => {
     setDeleteProjectTarget,
     openProjectMenuId,
     setOpenProjectMenuId,
+    clearProjectTasksTarget,
+    setClearProjectTasksTarget,
     openProjectIconMenuId,
     setOpenProjectIconMenuId,
     projectIconPickerProjectId,

@@ -193,13 +193,24 @@ export function SkillSetPage({ instructionSetId }: SkillSetPageProps) {
 
   const createTask = async (payload: TaskQuickAddPayload) => {
     try {
+      const duplicateCount = Number.isFinite(payload.duplicateCount)
+        ? Math.max(1, Math.floor(payload.duplicateCount))
+        : 1;
+
       await requestJson(`/api/skills/${instructionSetId}/tasks`, {
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          duplicateCount,
+          includePreviousContext: payload.includeContext,
+          model: payload.model,
+          previousContextMessages: payload.includeContext ? payload.contextCount : 0,
+          reasoning: payload.reasoning,
+          text: payload.text,
+        }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       });
       await loadSet();
-      toast.success("Skill task created");
+      toast.success(`Skill task created (${duplicateCount}x)`);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to create task");
     }

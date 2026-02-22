@@ -1,7 +1,7 @@
 "use client";
 
 import { Send } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { DragEvent, KeyboardEvent, ReactNode } from "react";
 
 import {
@@ -23,13 +23,14 @@ import {
 
 import { TaskModelSelect, TaskReasoningSelect } from "../task-controls/task-select-dropdowns";
 import { Button } from "../ui/button";
-import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
+import { Label } from "../ui/label";
 import { Textarea } from "../ui/textarea";
 
 export interface TaskQuickAddPayload {
   contextCount: number;
   includeContext: boolean;
+  duplicateCount: number;
   model: string;
   reasoning: string;
   text: string;
@@ -69,8 +70,8 @@ export function TaskQuickAdd({
   const [model, setModel] = useState(DEFAULT_TASK_MODEL);
   const [reasoning, setReasoning] = useState(DEFAULT_TASK_REASONING);
   const [fileDropReady, setFileDropReady] = useState(false);
-  const [includeContext, setIncludeContext] = useState(false);
   const [contextCount, setContextCount] = useState(0);
+  const [duplicateCount, setDuplicateCount] = useState(1);
   const [settingsExpanded, setSettingsExpanded] = useState(false);
   const [preferencesLoadedProjectId, setPreferencesLoadedProjectId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -78,6 +79,9 @@ export function TaskQuickAdd({
   const formRef = useRef<HTMLFormElement | null>(null);
   const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileDropDepthRef = useRef(0);
+  const componentId = useId();
+  const contextCountInputId = `task-context-count-${componentId}`;
+  const duplicateCountInputId = `task-duplicate-count-${componentId}`;
 
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
@@ -103,7 +107,6 @@ export function TaskQuickAdd({
     const saved = loadTaskFormPreferences(projectId);
     setModel(saved.model);
     setReasoning(saved.reasoning);
-    setIncludeContext(saved.includeContext);
     setContextCount(saved.contextCount);
     setPreferencesLoadedProjectId(projectId);
   }, [projectId]);
@@ -121,7 +124,6 @@ export function TaskQuickAdd({
       const preferences = detail.preferences;
       setModel(preferences.model);
       setReasoning(preferences.reasoning);
-      setIncludeContext(preferences.includeContext);
       setContextCount(preferences.contextCount);
     };
 
@@ -138,11 +140,11 @@ export function TaskQuickAdd({
 
     saveTaskFormPreferences(projectId, {
       contextCount,
-      includeContext,
+      includeContext: contextCount > 0,
       model,
       reasoning,
     });
-  }, [contextCount, includeContext, model, preferencesLoadedProjectId, projectId, reasoning]);
+  }, [contextCount, model, preferencesLoadedProjectId, projectId, reasoning]);
 
   useEffect(() => {
     if (typeof clearInputSignal !== "number") {
@@ -415,7 +417,8 @@ export function TaskQuickAdd({
     try {
       await onSubmit({
         contextCount,
-        includeContext,
+        includeContext: contextCount > 0,
+        duplicateCount,
         model,
         reasoning,
         text: trimmedText,
@@ -456,6 +459,11 @@ export function TaskQuickAdd({
   const handleContextCountChange = (value: string) => {
     const nextCount = Number.parseInt(value, 10);
     setContextCount(Number.isFinite(nextCount) ? Math.max(0, nextCount) : 0);
+  };
+
+  const handleDuplicateCountChange = (value: string) => {
+    const nextCount = Number.parseInt(value, 10);
+    setDuplicateCount(Number.isFinite(nextCount) ? Math.max(1, nextCount) : 1);
   };
 
   return (
@@ -528,39 +536,81 @@ export function TaskQuickAdd({
         ) : null}
       {settingsExpanded ? (
         <div className="absolute left-0 right-0 top-full z-20 mt-2 grid grid-cols-1 gap-2 rounded-md border border-black/15 bg-white p-2 shadow-lg md:grid-cols-4">
-          <TaskModelSelect
-            className="h-9 text-sm"
-            onFocus={() => setSettingsExpanded(true)}
-            onValueChange={setModel}
-            value={model}
-          />
-          <TaskReasoningSelect
-            className="h-9 text-sm"
-            onFocus={() => setSettingsExpanded(true)}
-            onValueChange={setReasoning}
-            value={reasoning}
-          />
-          <label className="flex h-9 items-center gap-2 rounded-md border border-black/15 px-3 text-sm">
-            <Checkbox
-              checked={includeContext}
-              onCheckedChange={(checked) => setIncludeContext(Boolean(checked))}
+          <div className="flex flex-col gap-1">
+            <Label
+              className="text-xs font-medium text-zinc-500"
+              htmlFor={`task-model-${componentId}`}
+            >
+              Model
+            </Label>
+            <TaskModelSelect
+              className="h-9 text-sm"
+              id={`task-model-${componentId}`}
+              onFocus={() => setSettingsExpanded(true)}
+              onValueChange={setModel}
+              value={model}
             />
-            <span>Include context</span>
-          </label>
-          <Input
-            className="h-9 text-sm"
-            disabled={!includeContext}
-            min={0}
-            draggable={false}
-            onDragStart={preventDragStart}
-            onMouseDown={stopEventPropagation}
-            onPointerDown={stopEventPropagation}
-            onChange={(event) => handleContextCountChange(event.target.value)}
-            onFocus={() => setSettingsExpanded(true)}
-            placeholder="Messages count"
-            type="number"
-            value={contextCount}
-          />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label
+              className="text-xs font-medium text-zinc-500"
+              htmlFor={`task-difficulty-${componentId}`}
+            >
+              Difficulty
+            </Label>
+            <TaskReasoningSelect
+              className="h-9 text-sm"
+              id={`task-difficulty-${componentId}`}
+              onFocus={() => setSettingsExpanded(true)}
+              onValueChange={setReasoning}
+              value={reasoning}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label
+              className="text-xs font-medium text-zinc-500"
+              htmlFor={contextCountInputId}
+            >
+              Include context
+            </Label>
+            <Input
+              aria-label="Include context messages count"
+              className="h-9 text-sm"
+              id={contextCountInputId}
+              draggable={false}
+              inputMode="numeric"
+              onChange={(event) => handleContextCountChange(event.target.value)}
+              onFocus={() => setSettingsExpanded(true)}
+              onMouseDown={stopEventPropagation}
+              onPointerDown={stopEventPropagation}
+              onDragStart={preventDragStart}
+              placeholder="Messages count"
+              type="text"
+              value={contextCount}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label
+              className="text-xs font-medium text-zinc-500"
+              htmlFor={duplicateCountInputId}
+            >
+              Duplicates
+            </Label>
+            <Input
+              aria-label="Duplicate count"
+              className="h-9 text-sm"
+              id={duplicateCountInputId}
+              inputMode="numeric"
+              onChange={(event) => handleDuplicateCountChange(event.target.value)}
+              onFocus={() => setSettingsExpanded(true)}
+              onMouseDown={stopEventPropagation}
+              onPointerDown={stopEventPropagation}
+              onDragStart={preventDragStart}
+              placeholder="1"
+              type="text"
+              value={duplicateCount}
+            />
+          </div>
         </div>
       ) : null}
     </form>

@@ -3,7 +3,18 @@
 import { useMemo } from "react";
 import type { KeyboardEventHandler } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronUp, EllipsisVertical, Pause, Pencil, Play, Save, Upload, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  EllipsisVertical,
+  Pause,
+  Pencil,
+  Play,
+  Save,
+  Trash2,
+  Upload,
+  X,
+} from "lucide-react";
 
 import { buildProjectAvatar } from "../task-controls/project-avatar";
 import { buildTaskScopeHref } from "../app-dashboard/helpers";
@@ -46,6 +57,7 @@ export const MainProjectsPageProjectCard = ({
     setProjectIconPickerProjectId,
     projectIconUploadProjectId,
     projectIconDeleteProjectId,
+    setClearProjectTasksTarget,
     setOpenProjectMenuId,
     openProjectMenuId,
     openProjectIconMenuId,
@@ -66,6 +78,8 @@ export const MainProjectsPageProjectCard = ({
   const projectIconSource = `/api/projects/${project.id}/icon?v=${encodeURIComponent(projectIconVersion)}`;
   const showFallbackAvatar = projectIconLoadErrors[project.id] ?? false;
   const visibleProjectTasks = useMemo(() => project.tasks.filter((task) => !isFinishedTask(task)), [project.tasks]);
+  const clearProjectTasksCount =
+    project.tasks.length + project.subprojects.reduce((count, subproject) => count + subproject.tasks.length, 0);
 
   const handleRenameKeyDown: KeyboardEventHandler<HTMLInputElement> = (event) => {
     if (event.key === "Enter") {
@@ -157,6 +171,7 @@ export const MainProjectsPageProjectCard = ({
                           : "rounded-none border-0 bg-transparent shadow-none ring-0"
                       }`}
                     >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         alt=""
                         aria-hidden="true"
@@ -346,7 +361,7 @@ export const MainProjectsPageProjectCard = ({
                 </Button>
                 {openProjectMenuId === project.id ? (
                   <div
-                    className="absolute right-0 z-20 mt-1 min-w-[95px] rounded-md border border-black/10 bg-white p-1 shadow-lg"
+                    className="absolute right-0 z-20 mt-1 min-w-[190px] rounded-md border border-black/10 bg-white p-1 shadow-lg"
                     role="menu"
                   >
                     <button
@@ -362,6 +377,24 @@ export const MainProjectsPageProjectCard = ({
                     >
                       <X className="h-4 w-4" />
                       <span>Delete</span>
+                    </button>
+                    <button
+                      className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-red-700 hover:bg-red-50"
+                      onMouseDown={stopDragPropagation}
+                      onPointerDown={stopDragPropagation}
+                      onClick={() => {
+                        setOpenProjectMenuId(null);
+                        setClearProjectTasksTarget({
+                          id: project.id,
+                          name: project.name,
+                          taskCount: clearProjectTasksCount,
+                        });
+                      }}
+                      role="menuitem"
+                      type="button"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      <span>Clear tasks</span>
                     </button>
                   </div>
                 ) : null}

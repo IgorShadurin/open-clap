@@ -10,6 +10,7 @@ import { createSkillSetTask } from "../../../../../lib/skills-service";
 interface CreateSkillTaskBody {
   includePreviousContext?: boolean;
   model?: string;
+  duplicateCount?: number;
   previousContextMessages?: number;
   reasoning?: string;
   text: string;
@@ -37,8 +38,13 @@ export async function POST(
     );
   }
 
+  const duplicateCount = Number.isFinite(body.duplicateCount)
+    ? Math.max(1, Math.floor(body.duplicateCount))
+    : 1;
+
   try {
     const task = await createSkillSetTask({
+      duplicateCount,
       includePreviousContext: body.includePreviousContext,
       instructionSetId: skillSetId,
       model: body.model,

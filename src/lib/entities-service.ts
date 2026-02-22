@@ -372,6 +372,20 @@ export async function deleteProject(projectId: string): Promise<void> {
   publishAppSync("project.deleted");
 }
 
+export async function clearProjectTasks(projectId: string): Promise<number> {
+  const result = await prisma.task.deleteMany({
+    where: {
+      projectId,
+    },
+  });
+
+  if (result.count > 0) {
+    publishAppSync("task.deleted");
+  }
+
+  return result.count;
+}
+
 export async function reorderProjects(orderedIds: string[]): Promise<void> {
   await prisma.$transaction(
     orderedIds.map((projectId, index) =>
@@ -598,12 +612,16 @@ export async function createTask(input: {
   model?: string;
   metadata?: string;
   skipInstructionSetDuplicateCheck?: boolean;
+  duplicateCount?: number;
   previousContextMessages?: number;
   projectId: string;
   reasoning?: string;
   subprojectId?: string | null;
   text: string;
 }): Promise<TaskEntity> {
+  const duplicateCount = Number.isFinite(input.duplicateCount)
+    ? Math.max(1, Math.floor(input.duplicateCount))
+    : 1;
   const priority = await nextPriority("task", {
     projectId: input.projectId,
     subprojectId:
@@ -618,22 +636,27 @@ export async function createTask(input: {
     });
   }
 
-  const task = await prisma.task.create({
-    data: {
-    includePreviousContext: input.includePreviousContext ?? false,
-    model: input.model ?? DEFAULT_TASK_MODEL,
-    previousContextMessages: input.previousContextMessages ?? 0,
-    priority,
-    projectId: input.projectId,
-      metadata: parsedMetadata,
-    reasoning: input.reasoning ?? DEFAULT_TASK_REASONING,
-      subprojectId:
-        typeof input.subprojectId === "string" ? input.subprojectId : null,
-      text: input.text,
-    },
-  });
+  const tasks: TaskEntity[] = [];
+  for (let index = 0; index < duplicateCount; index += 1) {
+    const task = await prisma.task.create({
+      data: {
+        includePreviousContext: input.includePreviousContext ?? false,
+        model: input.model ?? DEFAULT_TASK_MODEL,
+        previousContextMessages: input.previousContextMessages ?? 0,
+        priority: priority + index,
+        projectId: input.projectId,
+        metadata: parsedMetadata,
+        reasoning: input.reasoning ?? DEFAULT_TASK_REASONING,
+        subprojectId:
+          typeof input.subprojectId === "string" ? input.subprojectId : null,
+        text: input.text,
+      },
+    });
+    tasks.push(toTaskEntity(task));
+  }
+
   publishAppSync("task.created");
-  return toTaskEntity(task);
+  return tasks[0]!;
 }
 
 export async function updateTask(
