@@ -14,7 +14,7 @@ interface MainProjectsPageProjectListProps {
 
 export const MainProjectsPageProjectList = ({ controller }: MainProjectsPageProjectListProps) => {
   return (
-    <div className="space-y-4">
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
       {controller.projects.map((project) => {
         const projectCollapsed = isProjectCollapsedOnMainPage(project);
         const projectTasksVisible = isProjectTasksVisibleOnMainPage(project);

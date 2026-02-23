@@ -308,7 +308,6 @@ export const MainProjectsPageProjectCard = ({
                   >
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
-                  {projectCollapsed ? <span className="max-w-[42ch] truncate text-xs font-normal text-zinc-500">{project.path}</span> : null}
                 </div>
               )}
             </div>
@@ -402,7 +401,7 @@ export const MainProjectsPageProjectCard = ({
             </div>
           </CardTitle>
 
-          {projectCollapsed ? null : <div className="text-xs text-zinc-600">{project.path}</div>}
+          <div className="text-xs text-zinc-600">{project.path}</div>
         </CardHeader>
 
         {projectCollapsed ? null : (

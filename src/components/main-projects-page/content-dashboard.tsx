@@ -49,7 +49,7 @@ export const MainProjectsPageDashboard = ({ controller }: MainProjectsPageDashbo
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-zinc-100 p-4 md:p-8">
-      <div className="mx-auto w-full max-w-6xl space-y-6">
+      <div className="mx-auto w-full max-w-[86.4rem] space-y-6">
         <div className="space-y-4">
           <Link
             className="inline-flex items-center gap-2 text-xl font-semibold transition-opacity hover:opacity-80"

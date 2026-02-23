@@ -535,7 +535,7 @@ export function TaskQuickAdd({
           </div>
         ) : null}
       {settingsExpanded ? (
-        <div className="absolute left-0 right-0 top-full z-20 mt-2 grid grid-cols-1 gap-2 rounded-md border border-black/15 bg-white p-2 shadow-lg md:grid-cols-4">
+        <div className="absolute left-1/2 top-full z-20 mt-2 grid w-[40rem] max-w-[calc(100vw-2rem)] -translate-x-1/2 grid-cols-1 gap-2 rounded-md border border-black/15 bg-white p-2 shadow-lg md:grid-cols-4">
           <div className="flex flex-col gap-1">
             <Label
               className="text-xs font-medium text-zinc-500"
