@@ -67,6 +67,36 @@ test("POST /api/tasks creates duplicate project tasks when duplicateCount > 1", 
   assert.ok(tasks.every((task) => task.text === "Run integration checks"));
 });
 
+test("POST /api/tasks rejects whitespace-only task text", async () => {
+  await resetDatabase();
+
+  const project = await prisma.project.create({
+    data: {
+      name: "Whitespace project task",
+      path: "/tmp/whitespace-project-task",
+      priority: 0,
+    },
+    select: { id: true },
+  });
+
+  const createResponse = await createProjectTask(
+    new Request("http://localhost/api/tasks", {
+      body: JSON.stringify({
+        projectId: project.id,
+        text: "   \n\t ",
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    }),
+  );
+  assert.equal(createResponse.status, 400);
+
+  const tasks = await prisma.task.findMany({
+    where: { projectId: project.id },
+  });
+  assert.equal(tasks.length, 0);
+});
+
 test("POST /api/skills/:skillSetId/tasks creates duplicate skill tasks when duplicateCount > 1", async () => {
   await resetDatabase();
 
@@ -104,4 +134,33 @@ test("POST /api/skills/:skillSetId/tasks creates duplicate skill tasks when dupl
   assert.equal(skillTasks.length, 4);
   assert.ok(skillTasks.every((task) => task.text === "Summarize repository changes"));
   assert.equal(skillTasks[0].id, created.id);
+});
+
+test("POST /api/skills/:skillSetId/tasks rejects whitespace-only task text", async () => {
+  await resetDatabase();
+
+  const skillSet = await prisma.skillSet.create({
+    data: {
+      name: "Whitespace skill set",
+      priority: 0,
+    },
+    select: { id: true },
+  });
+
+  const createResponse = await createSkillTask(
+    new Request(`http://localhost/api/skills/${skillSet.id}/tasks`, {
+      body: JSON.stringify({
+        text: "   \n\t ",
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    }),
+    { params: Promise.resolve({ skillSetId: skillSet.id }) },
+  );
+  assert.equal(createResponse.status, 400);
+
+  const skillTasks = await prisma.skillTask.findMany({
+    where: { instructionSetId: skillSet.id },
+  });
+  assert.equal(skillTasks.length, 0);
 });

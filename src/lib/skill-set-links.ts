@@ -211,6 +211,11 @@ export function resolveSkillSetTasks(
 
     visited.add(setId);
     for (const task of instructionSet.tasks) {
+      const normalizedText = task.text.trim();
+      if (normalizedText.length < 1) {
+        continue;
+      }
+
       resolved.push({
         id: task.id,
         includePreviousContext: task.includePreviousContext,
@@ -219,7 +224,7 @@ export function resolveSkillSetTasks(
         reasoning: task.reasoning,
         sourceInstructionSetId: instructionSet.id,
         sourceInstructionSetName: instructionSet.name,
-        text: task.text,
+        text: normalizedText,
       });
     }
 

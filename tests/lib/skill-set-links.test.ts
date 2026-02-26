@@ -173,3 +173,51 @@ test("resolveInstructionSetTasks ignores linked-set cycles", () => {
   const tasks = resolveInstructionSetTasks(instructionSets, "set-a");
   assert.deepEqual(tasks.map((task) => task.id), ["task-a", "task-b"]);
 });
+
+test("resolveInstructionSetTasks skips tasks with empty text", () => {
+  const instructionSets = [
+    {
+      createdAt: "2026-01-01T00:00:00.000Z",
+      description: "Set A",
+      id: "set-a",
+      imagePath: null,
+      linkedInstructionSetIds: [],
+      mainPageTasksVisible: true,
+      name: "Set A",
+      priority: 1,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      tasks: [
+        {
+          createdAt: "2026-01-01T00:00:00.000Z",
+          id: "task-a-empty",
+          instructionSetId: "set-a",
+          includePreviousContext: false,
+          model: "gpt-5.3-codex-spark",
+          paused: false,
+          previousContextMessages: 0,
+          priority: 0,
+          reasoning: "medium",
+          text: "   ",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          createdAt: "2026-01-01T00:00:00.000Z",
+          id: "task-a-valid",
+          instructionSetId: "set-a",
+          includePreviousContext: false,
+          model: "gpt-5.3-codex-spark",
+          paused: false,
+          previousContextMessages: 0,
+          priority: 1,
+          reasoning: "medium",
+          text: "  Keep this task  ",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+    },
+  ] as const satisfies InstructionSetTreeItem[];
+
+  const tasks = resolveInstructionSetTasks(instructionSets, "set-a");
+  assert.deepEqual(tasks.map((task) => task.id), ["task-a-valid"]);
+  assert.equal(tasks[0]?.text, "Keep this task");
+});

@@ -30,6 +30,23 @@ export async function PATCH(
     );
   }
 
+  if (!body || typeof body !== "object") {
+    return NextResponse.json<ApiErrorShape>(
+      createApiError("INVALID_PAYLOAD", "Request payload must be an object"),
+      { status: 400 },
+    );
+  }
+
+  if (
+    body.text !== undefined &&
+    (typeof body.text !== "string" || body.text.trim().length < 1)
+  ) {
+    return NextResponse.json<ApiErrorShape>(
+      createApiError("INVALID_PAYLOAD", "Field `text` must be a non-empty string when provided"),
+      { status: 400 },
+    );
+  }
+
   try {
     const task = await updateTask(taskId, body);
     return NextResponse.json<TaskEntity>(task, { status: 200 });

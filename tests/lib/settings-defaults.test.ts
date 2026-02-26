@@ -35,7 +35,7 @@ test("DEFAULT_SETTINGS defines all required baseline keys", () => {
     ),
     true,
   );
-  assert.equal(DEFAULT_SETTINGS.daemon_max_parallel_tasks, "2");
+  assert.equal(DEFAULT_SETTINGS.daemon_max_parallel_tasks, "1");
   assert.equal(DEFAULT_SETTINGS.codex_usage_auth_file, "~/.codex/auth.json");
   assert.equal(DEFAULT_SETTINGS.codex_usage_proxy_enabled, "false");
   assert.equal(DEFAULT_SETTINGS.codex_usage_proxy_url, "");

@@ -10,7 +10,7 @@ export const DEFAULT_SETTINGS: SettingMap = {
   codex_usage_auth_file: "~/.codex/auth.json",
   codex_usage_proxy_enabled: "false",
   codex_usage_proxy_url: "",
-  daemon_max_parallel_tasks: "2",
+  daemon_max_parallel_tasks: "1",
   default_project_base_path: ".",
   project_path_sort_mode: "modified",
 };

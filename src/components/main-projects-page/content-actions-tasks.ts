@@ -234,6 +234,12 @@ export const useMainProjectsPageTaskActions = ({
       return;
     }
 
+    const normalizedCustomText = payload.text.trim();
+    if (normalizedCustomText.length < 1) {
+      state.setErrorMessage("Task text is required");
+      return;
+    }
+
     try {
       await requestJson("/api/tasks", {
         body: JSON.stringify({
@@ -244,7 +250,7 @@ export const useMainProjectsPageTaskActions = ({
           projectId: project.id,
           reasoning: payload.reasoning.trim() || DEFAULT_TASK_REASONING,
           subprojectId,
-          text: payload.text.trim(),
+          text: normalizedCustomText,
         }),
         headers: { "Content-Type": "application/json" },
         method: "POST",

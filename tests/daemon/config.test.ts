@@ -30,7 +30,7 @@ test("loadDaemonConfig falls back when max parallel is invalid", () => {
     },
   });
 
-  assert.equal(config.maxParallelTasks, 2);
+  assert.equal(config.maxParallelTasks, 1);
 });
 
 test("loadDaemonConfig normalizes legacy codex template flags", () => {

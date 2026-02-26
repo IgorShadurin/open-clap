@@ -519,6 +519,11 @@ export async function createInstructionTask(input: {
   reasoning?: string;
   text: string;
 }): Promise<InstructionTaskEntity> {
+  const normalizedText = input.text.trim();
+  if (normalizedText.length < 1) {
+    throw new Error("Task text is required");
+  }
+
   const duplicateCount = Number.isFinite(input.duplicateCount)
     ? Math.max(1, Math.floor(input.duplicateCount))
     : 1;
@@ -547,7 +552,7 @@ export async function createInstructionTask(input: {
         previousContextMessages: input.previousContextMessages ?? 0,
         priority,
         reasoning: input.reasoning?.trim() || DEFAULT_TASK_REASONING,
-        text: input.text.trim(),
+        text: normalizedText,
       },
     });
 
@@ -595,6 +600,11 @@ export async function updateInstructionTask(
     text: string;
   }>,
 ): Promise<InstructionTaskEntity> {
+  const normalizedText = input.text === undefined ? undefined : input.text.trim();
+  if (input.text !== undefined && normalizedText.length < 1) {
+    throw new Error("Task text is required");
+  }
+
   const task = await prisma.skillTask.update({
     data: {
       includePreviousContext: input.includePreviousContext,
@@ -602,7 +612,7 @@ export async function updateInstructionTask(
       paused: input.paused,
       previousContextMessages: input.previousContextMessages,
       reasoning: input.reasoning?.trim(),
-      text: input.text?.trim(),
+      text: normalizedText,
     },
     where: { id: instructionTaskId },
   });

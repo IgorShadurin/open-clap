@@ -20,7 +20,7 @@ export interface LoadDaemonConfigOptions {
   env?: EnvMap;
 }
 
-const FALLBACK_MAX_PARALLEL_TASKS = 2;
+const FALLBACK_MAX_PARALLEL_TASKS = 1;
 const DEFAULT_POLL_INTERVAL_MS = 1000;
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {

@@ -90,7 +90,8 @@ export const MainProjectsPageProjectTasksSection = ({
           submitAriaLabel: `Add task to ${project.name}`,
           submitTitle: `Add task to ${project.name}`,
         },
-        (payload) => handleQuickTaskCreate(project, payload, null),
+        (payload, selectedInstructionSetId) =>
+          handleQuickTaskCreate(project, payload, null, selectedInstructionSetId),
       )}
       {visibleProjectTasks.length < 1 ? (
         <div className="rounded-md border border-dashed border-black/15 px-3 py-2 text-sm text-zinc-500">

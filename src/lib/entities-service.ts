@@ -622,6 +622,10 @@ export async function createTask(input: {
   const duplicateCount = Number.isFinite(input.duplicateCount)
     ? Math.max(1, Math.floor(input.duplicateCount))
     : 1;
+  const normalizedText = input.text.trim();
+  if (normalizedText.length < 1) {
+    throw new Error("Task text is required");
+  }
   const priority = await nextPriority("task", {
     projectId: input.projectId,
     subprojectId:
@@ -649,7 +653,7 @@ export async function createTask(input: {
         reasoning: input.reasoning ?? DEFAULT_TASK_REASONING,
         subprojectId:
           typeof input.subprojectId === "string" ? input.subprojectId : null,
-        text: input.text,
+        text: normalizedText,
       },
     });
     tasks.push(toTaskEntity(task));
@@ -671,6 +675,11 @@ export async function updateTask(
     text: string;
   }>,
 ): Promise<TaskEntity> {
+  const normalizedText = input.text === undefined ? undefined : input.text.trim();
+  if (input.text !== undefined && normalizedText.length < 1) {
+    throw new Error("Task text is required");
+  }
+
   const existing = await prisma.task.findUnique({
     select: {
       editLocked: true,
@@ -713,11 +722,11 @@ export async function updateTask(
       includePreviousContext: input.includePreviousContext,
       model: input.model,
       paused: input.paused,
-    previousContextMessages: input.previousContextMessages,
-    reasoning: input.reasoning,
-    status: input.status,
-    metadata,
-    text: input.text,
+      previousContextMessages: input.previousContextMessages,
+      reasoning: input.reasoning,
+      status: input.status,
+      metadata,
+      text: normalizedText,
     },
     where: { id: taskId },
   });
