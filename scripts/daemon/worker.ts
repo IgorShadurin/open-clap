@@ -149,17 +149,31 @@ function truncateForLog(value: string, limit = 4000): string {
   return `${value.slice(0, limit)}... [truncated ${value.length - limit} chars]`;
 }
 
+function selectSemanticFailureInput(stdout: string, stderr: string): string {
+  const trimmedStdout = stdout.trim();
+  if (trimmedStdout.length > 0) {
+    return trimmedStdout;
+  }
+
+  const trimmedStderr = stderr.trim();
+  if (trimmedStderr.length <= 4000) {
+    return trimmedStderr;
+  }
+
+  // For very large stderr logs, inspect the tail where the final diagnosis usually appears.
+  return trimmedStderr.slice(-4000);
+}
+
 function detectSemanticFailure(stdout: string, stderr: string): string | null {
-  const combined = `${stdout}\n${stderr}`.toLowerCase();
+  const combined = selectSemanticFailureInput(stdout, stderr).toLowerCase();
   const patterns = [
     /write access is blocked/,
     /read-only sandbox/,
     /operation not permitted/,
     /permission denied/,
-    /couldn't create/,
-    /could not create/,
-    /can['’]?t create/,
-    /cannot create/,
+    /\btask (?:was|is) not completed\b/,
+    /\b(?:i|we)\s+(?:can(?:not|['’]t)|could(?: not|['’]t)|am unable to|are unable to)\b[\s\S]{0,140}\b(?:complete|finish|proceed|execute|deliver|write|modify|create)\b/,
+    /\b(?:unable|failed)\s+to\s+(?:complete|finish|proceed|execute|deliver|write|modify|create)\b/,
   ];
 
   for (const pattern of patterns) {

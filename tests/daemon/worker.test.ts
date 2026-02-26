@@ -119,3 +119,77 @@ test("executeTask returns failed result when codex output indicates read-only sa
   assert.equal(result.fullResponse.includes("not completed"), true);
   assert.equal(result.finishedAt instanceof Date, true);
 });
+
+test("executeTask ignores code-like create-failure phrases inside stderr logs", async () => {
+  const task: DaemonTask = {
+    id: "t6",
+    text: "Implement feature",
+    contextPath: "/tmp/project",
+    model: "gpt-5.3-codex",
+    reasoning: "high",
+    includeHistory: false,
+  };
+
+  const result = await executeTask(task, templates, {
+    commandRunner: async () => ({
+      code: 0,
+      signal: null,
+      stderr:
+        'case .noClipData:\n  return "Could not create a valid clip from the selected range."\n' +
+        'test("cannot create subproject using same directory", () => {})',
+      stdout: "Implemented.\nAll requested changes are now in place.",
+    }),
+  });
+
+  assert.equal(result.status, "done");
+  assert.equal(result.fullResponse.includes("Implemented"), true);
+  assert.equal(result.finishedAt instanceof Date, true);
+});
+
+test("executeTask returns failed result for explicit inability language", async () => {
+  const task: DaemonTask = {
+    id: "t7",
+    text: "Implement feature",
+    contextPath: "/tmp/project",
+    model: "gpt-5.3-codex",
+    reasoning: "high",
+    includeHistory: false,
+  };
+
+  const result = await executeTask(task, templates, {
+    commandRunner: async () => ({
+      code: 0,
+      signal: null,
+      stderr: "",
+      stdout: "I could not complete this task because write access is blocked.",
+    }),
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.fullResponse.includes("not completed"), true);
+  assert.equal(result.finishedAt instanceof Date, true);
+});
+
+test("executeTask returns failed result from stderr semantic failure when stdout is empty", async () => {
+  const task: DaemonTask = {
+    id: "t8",
+    text: "Implement feature",
+    contextPath: "/tmp/project",
+    model: "gpt-5.3-codex",
+    reasoning: "high",
+    includeHistory: false,
+  };
+
+  const result = await executeTask(task, templates, {
+    commandRunner: async () => ({
+      code: 0,
+      signal: null,
+      stderr: "Permission denied while writing to the workspace.",
+      stdout: "",
+    }),
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.fullResponse.includes("permission denied"), true);
+  assert.equal(result.finishedAt instanceof Date, true);
+});

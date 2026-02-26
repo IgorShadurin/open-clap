@@ -5,6 +5,8 @@ import { TaskScheduler } from "./scheduler";
 import { StatusReporter } from "./status-reporter";
 import type { WorkerTemplates } from "./template-renderer";
 import type { TaskAuditLogger } from "./task-audit-log";
+import type { WaitFunction } from "./retry";
+import { DAEMON_RETRY_POLICY, retryAsync } from "./retry";
 import type { DaemonTask, TaskExecutionResult } from "../../shared/contracts/task";
 import { executeTask } from "./worker";
 import {
@@ -22,6 +24,12 @@ interface TaskControl extends RunningTaskControl {
 
 const FIVE_HOUR_MIN_REMAINING_PERCENT = 2;
 
+interface FiveHourUsageRetryOptions {
+  attempts?: number;
+  delayMs?: number;
+  wait?: WaitFunction;
+}
+
 function computeRemainingFiveHourPercent(usage: {
   fiveHourUsedPercent?: number;
 }): number | null {
@@ -36,17 +44,44 @@ function computeRemainingFiveHourPercent(usage: {
 async function shouldAllowExecutionBasedOnFiveHourUsage(
   apiClient: DaemonApiClient,
   logger: LoggerLike,
+  retryOptions: FiveHourUsageRetryOptions = {},
 ): Promise<boolean> {
-  try {
-    const usage = await apiClient.fetchCodexUsageState();
-    if (!usage) {
-      logger.log("waiting", "Execution paused: 5h usage metrics unavailable");
-      return false;
-    }
+  const attempts = Number.isFinite(retryOptions.attempts)
+    ? Math.max(1, Math.floor(retryOptions.attempts ?? 1))
+    : DAEMON_RETRY_POLICY.attempts;
+  const delayMs = Number.isFinite(retryOptions.delayMs)
+    ? Math.max(0, Math.floor(retryOptions.delayMs ?? 0))
+    : DAEMON_RETRY_POLICY.delayMs;
 
+  try {
+    const usage = await retryAsync(async () => {
+      let fetchedUsage: { fiveHourUsedPercent: number } | null;
+      try {
+        fetchedUsage = await apiClient.fetchCodexUsageState();
+      } catch {
+        throw new Error("metrics_fetch_failed");
+      }
+      if (!fetchedUsage) {
+        throw new Error("metrics_unavailable");
+      }
+
+      const remainingPercent = computeRemainingFiveHourPercent(fetchedUsage);
+      if (remainingPercent === null) {
+        throw new Error("metrics_invalid");
+      }
+
+      return fetchedUsage;
+    }, {
+      attempts,
+      delayMs,
+      wait: retryOptions.wait,
+    });
     const remainingPercent = computeRemainingFiveHourPercent(usage);
     if (remainingPercent === null) {
-      logger.log("waiting", "Execution paused: 5h usage values are invalid");
+      logger.log(
+        "waiting",
+        `Execution paused: 5h usage values are invalid after ${attempts} attempts`,
+      );
       return false;
     }
 
@@ -57,10 +92,27 @@ async function shouldAllowExecutionBasedOnFiveHourUsage(
       );
       return false;
     }
-
     return true;
-  } catch {
-    logger.log("waiting", "Execution paused: 5h usage check failed");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    if (reason === "metrics_invalid") {
+      logger.log(
+        "waiting",
+        `Execution paused: 5h usage values are invalid after ${attempts} attempts`,
+      );
+      return false;
+    }
+    if (reason === "metrics_fetch_failed") {
+      logger.log(
+        "waiting",
+        `Execution paused: 5h usage check failed after ${attempts} attempts`,
+      );
+      return false;
+    }
+    logger.log(
+      "waiting",
+      `Execution paused: 5h usage metrics unavailable after ${attempts} attempts`,
+    );
     return false;
   }
 }
@@ -76,6 +128,7 @@ export interface RunTaskExecutionCycleOptions {
   taskAuditLogger?: TaskAuditLogger;
   templates: WorkerTemplates;
   codexCommandTemplate?: string;
+  fiveHourUsageRetry?: FiveHourUsageRetryOptions;
   workerExecutor?: (
     task: DaemonTask,
     templates: WorkerTemplates,
@@ -104,6 +157,7 @@ export async function runTaskExecutionCycle({
   taskAuditLogger,
   templates,
   codexCommandTemplate,
+  fiveHourUsageRetry,
   workerExecutor = executeTask,
 }: RunTaskExecutionCycleOptions): Promise<ExecutionCycleResult> {
   const slotsRequested = scheduler.availableSlots();
@@ -112,7 +166,7 @@ export async function runTaskExecutionCycle({
     return { fetched: 0, slotsRequested, started: 0 };
   }
 
-  if (!(await shouldAllowExecutionBasedOnFiveHourUsage(apiClient, logger))) {
+  if (!(await shouldAllowExecutionBasedOnFiveHourUsage(apiClient, logger, fiveHourUsageRetry))) {
     return { fetched: 0, slotsRequested, started: 0 };
   }
 

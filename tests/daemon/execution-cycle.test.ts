@@ -1,7 +1,6 @@
 import { assertTestDatabaseGuard } from "../helpers/test-db";
 
 assertTestDatabaseGuard();
-
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -27,7 +26,8 @@ class FakeApiClient implements DaemonApiClient {
     fullResponse?: string;
   }> = [];
   public queuedTasks: DaemonTask[] = [];
-  public fiveHourUsage: number[] = [];
+  public fiveHourUsage: Array<number | null | Error> = [];
+  public fiveHourUsageFetchCount = 0;
 
   public async acknowledgeImmediateAction(actionId: string): Promise<void> {
     this.acknowledgedActions.push(actionId);
@@ -45,7 +45,11 @@ class FakeApiClient implements DaemonApiClient {
   }
 
   public async fetchCodexUsageState(): Promise<{ fiveHourUsedPercent: number } | null> {
+    this.fiveHourUsageFetchCount += 1;
     const usage = this.fiveHourUsage.shift();
+    if (usage instanceof Error) {
+      throw usage;
+    }
     if (typeof usage !== "number") {
       return null;
     }
@@ -292,12 +296,13 @@ test("runTaskExecutionCycle waits when 5h remaining is below threshold", async (
   assert.equal(logs.some((log) => log.status === "waiting"), true);
   assert.equal(logs.some((log) => log.message.includes("5h limit remaining")), true);
 });
-
 test("runTaskExecutionCycle waits when usage metrics are unavailable", async () => {
   const apiClient = new FakeApiClient();
   apiClient.queuedTasks = [createTask("metric-unknown-task")];
+  apiClient.fiveHourUsage = [null, null, null];
   const scheduler = new TaskScheduler(1);
   const logs: Array<{ message: string; status: string }> = [];
+  const waits: number[] = [];
   const result = await runTaskExecutionCycle({
     activeWorkers: new Map(),
     apiClient,
@@ -311,6 +316,13 @@ test("runTaskExecutionCycle waits when usage metrics are unavailable", async () 
     scheduler,
     statusReporter: new StatusReporter(apiClient),
     templates,
+    fiveHourUsageRetry: {
+      attempts: 3,
+      delayMs: 3000,
+      wait: async (ms) => {
+        waits.push(ms);
+      },
+    },
     workerExecutor: async () => ({
       finishedAt: new Date(),
       fullResponse: "",
@@ -320,17 +332,52 @@ test("runTaskExecutionCycle waits when usage metrics are unavailable", async () 
 
   assert.deepEqual(result, { fetched: 0, slotsRequested: 1, started: 0 });
   assert.deepEqual(apiClient.fetchCalls, []);
-  assert.equal(logs.some((log) => log.message.includes("5h usage metrics unavailable")), true);
+  assert.equal(apiClient.fiveHourUsageFetchCount, 3);
+  assert.deepEqual(waits, [3000, 3000]);
+  assert.equal(logs.some((log) => log.message.includes("5h usage metrics unavailable after 3 attempts")), true);
 });
+test("runTaskExecutionCycle retries 5h usage checks and starts once usage is available", async () => {
+  const apiClient = new FakeApiClient();
+  apiClient.queuedTasks = [createTask("retry-then-run-task")];
+  apiClient.fiveHourUsage = [null, new Error("fetch failed"), 96];
+  const scheduler = new TaskScheduler(1);
+  const activeWorkers = new Map<string, Promise<void>>();
+  const waits: number[] = [];
+  const result = await runTaskExecutionCycle({
+    activeWorkers,
+    apiClient,
+    logger: { log: () => {} },
+    runningTasks: new Map(),
+    runningTaskScopeById: new Map(),
+    scheduler,
+    statusReporter: new StatusReporter(apiClient),
+    templates,
+    fiveHourUsageRetry: {
+      attempts: 3,
+      delayMs: 3000,
+      wait: async (ms) => {
+        waits.push(ms);
+      },
+    },
+    workerExecutor: async () => ({
+      finishedAt: new Date(),
+      fullResponse: "Fake worker response",
+      status: "done",
+    }),
+  });
 
+  assert.deepEqual(result, { fetched: 1, slotsRequested: 1, started: 1 });
+  assert.equal(apiClient.fiveHourUsageFetchCount, 3);
+  assert.deepEqual(waits, [3000, 3000]);
+  assert.deepEqual(apiClient.fetchCalls, [1]);
+  await Promise.allSettled([...activeWorkers.values()]);
+});
 test("runTaskExecutionCycle resumes when 5h remaining rises above threshold", async () => {
   const apiClient = new FakeApiClient();
   apiClient.queuedTasks = [createTask("ok-task")];
   apiClient.fiveHourUsage = [96];
-
   const scheduler = new TaskScheduler(1);
   const activeWorkers = new Map<string, Promise<void>>();
-
   const result = await runTaskExecutionCycle({
     activeWorkers,
     apiClient,
@@ -346,7 +393,6 @@ test("runTaskExecutionCycle resumes when 5h remaining rises above threshold", as
       status: "done",
     }),
   });
-
   assert.deepEqual(result, { fetched: 1, slotsRequested: 1, started: 1 });
   assert.deepEqual(apiClient.fetchCalls, [1]);
   await Promise.allSettled([...activeWorkers.values()]);

@@ -4,6 +4,7 @@ import { runTaskExecutionCycle } from "./execution-cycle";
 import { handleImmediateActions } from "./immediate-action-handler";
 import { createImmediateActionPoller } from "./immediate-action-poller";
 import { createLogger } from "./logger";
+import { DAEMON_RETRY_POLICY, retryAsync } from "./retry";
 import { TaskScheduler } from "./scheduler";
 import { StatusReporter } from "./status-reporter";
 import { createTaskAuditLogger, resolveDaemonLogFilePath } from "./task-audit-log";
@@ -53,6 +54,7 @@ export function startDaemon(): DaemonRuntime {
   const runningTaskScopeById = new Map<string, string>();
   const activeWorkers = new Map<string, Promise<void>>();
   const statusReporter = new StatusReporter(apiClient);
+  let pollCycleInFlight = false;
 
   logger.log(
     "info",
@@ -112,7 +114,10 @@ export function startDaemon(): DaemonRuntime {
 
   const syncRuntimeSettings = async (): Promise<void> => {
     try {
-      const response = await apiClient.fetchRuntimeSettings(settingsRevision ?? undefined);
+      const response = await retryAsync(
+        () => apiClient.fetchRuntimeSettings(settingsRevision ?? undefined),
+        DAEMON_RETRY_POLICY,
+      );
       if (settingsRevision === null) {
         settingsRevision = response.revision;
       }
@@ -124,19 +129,27 @@ export function startDaemon(): DaemonRuntime {
       applyRuntimeSettings(response.settings, response.revision);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      logger.log("failed", `Failed to sync daemon settings: ${message}`);
+      logger.log(
+        "failed",
+        `Failed to sync daemon settings after ${DAEMON_RETRY_POLICY.attempts} attempts: ${message}`,
+      );
     }
   };
 
   const runPollCycle = async (): Promise<void> => {
-    await syncRuntimeSettings();
-
-    const templates = {
-      defaultTemplate: config.taskTemplate,
-      historyTemplate: config.taskTemplateWithHistory,
-    };
+    if (pollCycleInFlight) {
+      return;
+    }
+    pollCycleInFlight = true;
 
     try {
+      await syncRuntimeSettings();
+
+      const templates = {
+        defaultTemplate: config.taskTemplate,
+        historyTemplate: config.taskTemplateWithHistory,
+      };
+
       const actions = await apiClient.fetchImmediateActions();
       if (actions.length > 0) {
         const handled = await handleImmediateActions({
@@ -155,6 +168,7 @@ export function startDaemon(): DaemonRuntime {
         activeWorkers,
         apiClient,
         codexCommandTemplate: config.codexCommandTemplate,
+        fiveHourUsageRetry: DAEMON_RETRY_POLICY,
         logger,
         runningTasks,
         runningTaskScopeById,
@@ -166,6 +180,8 @@ export function startDaemon(): DaemonRuntime {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.log("failed", `Daemon poll error: ${message}`);
+    } finally {
+      pollCycleInFlight = false;
     }
   };
 
