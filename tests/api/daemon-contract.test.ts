@@ -40,7 +40,7 @@ test.after(async () => {
   await resetDatabase();
 });
 
-test("daemon claim endpoint returns one task per scope and marks tasks in progress", async () => {
+test("daemon claim endpoint drains tasks from the highest-priority active project first", async () => {
   await resetDatabase();
 
   const projectOne = await createProject("Project One");
@@ -63,12 +63,13 @@ test("daemon claim endpoint returns one task per scope and marks tasks in progre
     },
     select: { id: true },
   });
-  await prisma.task.create({
+  const projectOneMainTaskTwo = await prisma.task.create({
     data: {
       priority: 1,
       projectId: projectOne.id,
       text: "p1-main-2",
     },
+    select: { id: true },
   });
   const projectOneSubTask = await prisma.task.create({
     data: {
@@ -102,9 +103,10 @@ test("daemon claim endpoint returns one task per scope and marks tasks in progre
 
   assert.deepEqual(claimedIds, [
     projectOneMainTaskOne.id,
+    projectOneMainTaskTwo.id,
     projectOneSubTask.id,
-    projectTwoMainTask.id,
   ]);
+  assert.equal(claimedIds.includes(projectTwoMainTask.id), false);
 
   const claimedTasks = await prisma.task.findMany({
     select: {
@@ -121,6 +123,17 @@ test("daemon claim endpoint returns one task per scope and marks tasks in progre
 
   assert.equal(claimedTasks.every((task) => task.editLocked), true);
   assert.equal(claimedTasks.every((task) => task.status === "in_progress"), true);
+
+  const secondResponse = await claimTasksPost(
+    new Request("http://localhost/api/daemon/tasks/claim", {
+      body: JSON.stringify({ limit: 4 }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    }),
+  );
+  assert.equal(secondResponse.status, 200);
+  const secondPayload = (await secondResponse.json()) as { tasks: Array<{ id: string }> };
+  assert.deepEqual(secondPayload.tasks.map((task) => task.id), [projectTwoMainTask.id]);
 });
 
 test("daemon claim history includes only previous task texts, not codex responses", async () => {

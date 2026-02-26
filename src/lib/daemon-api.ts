@@ -5,7 +5,6 @@ import type {
   DaemonTaskStatus,
   ImmediateAction,
 } from "../../shared/contracts/task";
-import { selectParallelTasks } from "../../shared/logic/task-priority";
 import { publishAppSync } from "./live-sync";
 import { prisma } from "./prisma";
 import { buildHistoryBundle, selectRecentMessages } from "./task-history";
@@ -118,25 +117,6 @@ export async function claimNextTasks(limit: number): Promise<DaemonTask[]> {
   const now = new Date();
 
   const claimedTasks = await prisma.$transaction(async (tx) => {
-    const runningTasks = await tx.task.findMany({
-      select: {
-        id: true,
-        projectId: true,
-        subprojectId: true,
-      },
-      where: {
-        status: TaskStatus.in_progress,
-      },
-    });
-
-    const activeScopeKeys = new Set(
-      runningTasks.map((task) =>
-        task.subprojectId
-          ? `subproject:${task.projectId}:${task.subprojectId}`
-          : `project:${task.projectId}`,
-      ),
-    );
-
     const candidates = await tx.task.findMany({
       include: {
         project: {
@@ -150,7 +130,12 @@ export async function claimNextTasks(limit: number): Promise<DaemonTask[]> {
           },
         },
       },
-      orderBy: [{ priority: "asc" }, { createdAt: "asc" }],
+      orderBy: [
+        { project: { priority: "asc" } },
+        { project: { createdAt: "asc" } },
+        { priority: "asc" },
+        { createdAt: "asc" },
+      ],
       take: normalizedLimit * 10,
       where: {
         editLocked: false,
@@ -170,11 +155,15 @@ export async function claimNextTasks(limit: number): Promise<DaemonTask[]> {
       },
     });
 
-    const selected = selectParallelTasks(
-      candidates.map(toDaemonTask),
-      normalizedLimit,
-      activeScopeKeys,
-    );
+    const selectedProjectId = candidates[0]?.projectId;
+    if (!selectedProjectId) {
+      return [];
+    }
+
+    const selected = candidates
+      .filter((candidate) => candidate.projectId === selectedProjectId)
+      .slice(0, normalizedLimit)
+      .map(toDaemonTask);
 
     if (selected.length < 1) {
       return [];

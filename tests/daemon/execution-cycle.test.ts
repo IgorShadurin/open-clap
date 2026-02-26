@@ -170,7 +170,7 @@ test("runTaskExecutionCycle skips fetching when there is no capacity", async () 
   assert.deepEqual(apiClient.inProgressCalls, []);
 });
 
-test("runTaskExecutionCycle starts at most one task per project/subproject scope", async () => {
+test("runTaskExecutionCycle starts fetched tasks in claim order when capacity allows", async () => {
   const apiClient = new FakeApiClient();
   apiClient.queuedTasks = [
     createTask("p1-main-1"),
@@ -205,9 +205,9 @@ test("runTaskExecutionCycle starts at most one task per project/subproject scope
     templates,
   });
 
-  assert.equal(result.started, 4);
+  assert.equal(result.started, 6);
   assert.deepEqual(apiClient.inProgressCalls, [
-    ["p1-main-1", "p1-sub1-1", "p1-sub2-1", "p2-main-1"],
+    ["p1-main-1", "p1-main-2", "p1-sub1-1", "p1-sub1-2", "p1-sub2-1", "p2-main-1"],
   ]);
 });
 

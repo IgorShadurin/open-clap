@@ -9,10 +9,7 @@ import type { WaitFunction } from "./retry";
 import { DAEMON_RETRY_POLICY, retryAsync } from "./retry";
 import type { DaemonTask, TaskExecutionResult } from "../../shared/contracts/task";
 import { executeTask } from "./worker";
-import {
-  getExecutionScopeKey,
-  selectParallelTasks,
-} from "../../shared/logic/task-priority";
+import { getExecutionScopeKey } from "../../shared/logic/task-priority";
 
 interface LoggerLike {
   log: (status: LogStatus, message: string) => void;
@@ -176,14 +173,8 @@ export async function runTaskExecutionCycle({
     return { fetched: 0, slotsRequested, started: 0 };
   }
 
-  const selectedTasks = selectParallelTasks(
-    fetchedTasks,
-    slotsRequested,
-    new Set(runningTaskScopeById.values()),
-  );
-
   const claimedTasks: DaemonTask[] = [];
-  for (const task of selectedTasks) {
+  for (const task of fetchedTasks) {
     if (!scheduler.startTask(task.id)) {
       continue;
     }
