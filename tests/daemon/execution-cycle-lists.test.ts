@@ -5,6 +5,7 @@ assertTestDatabaseGuard();
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { DaemonCodexUsageState } from "../../scripts/daemon/api-client";
 import type { DaemonApiClient } from "../../scripts/daemon/api-client";
 import { runTaskExecutionCycle } from "../../scripts/daemon/execution-cycle";
 import { TaskScheduler } from "../../scripts/daemon/scheduler";
@@ -26,7 +27,7 @@ class FakeApiClient implements DaemonApiClient {
     taskId: string;
   }> = [];
   public queuedTasks: DaemonTask[] = [];
-  public fiveHourUsage: Array<number | null | Error> = [];
+  public fiveHourUsage: Array<DaemonCodexUsageState | null | Error> = [];
 
   public async acknowledgeImmediateAction(actionId: string): Promise<void> {
     void actionId;
@@ -47,19 +48,20 @@ class FakeApiClient implements DaemonApiClient {
     };
   }
 
-  public async fetchCodexUsageState(): Promise<{ fiveHourUsedPercent: number } | null> {
+  public async fetchCodexUsageState(): Promise<DaemonCodexUsageState | null> {
     const usage = this.fiveHourUsage.shift();
     if (usage instanceof Error) {
       throw usage;
     }
-    if (typeof usage !== "number") {
+    if (!usage) {
       return null;
     }
-    return { fiveHourUsedPercent: usage };
+    return usage;
   }
 
-  public async fetchNextTasks(limit: number): Promise<DaemonTask[]> {
+  public async fetchNextTasks(limit: number, disallowedModels?: string[]): Promise<DaemonTask[]> {
     this.fetchCalls.push(limit);
+    void disallowedModels;
     return this.queuedTasks.slice(0, limit);
   }
 
@@ -105,7 +107,7 @@ test("runTaskExecutionCycle logs list prompt count for list-based tasks", async 
       text: "Translate $list-ios-langs and keep $list-ios-langs consistent",
     },
   ];
-  apiClient.fiveHourUsage = [50];
+  apiClient.fiveHourUsage = [{ fiveHourUsedPercent: 50 }];
 
   const scheduler = new TaskScheduler(1);
   const activeWorkers = new Map<string, Promise<void>>();
@@ -153,7 +155,7 @@ test("runTaskExecutionCycle logs list subtask progress with duration", async () 
       text: "Translate $list-ios-langs and keep $list-ios-langs consistent",
     },
   ];
-  apiClient.fiveHourUsage = [50];
+  apiClient.fiveHourUsage = [{ fiveHourUsedPercent: 50 }];
 
   const scheduler = new TaskScheduler(1);
   const activeWorkers = new Map<string, Promise<void>>();
@@ -206,7 +208,7 @@ test("runTaskExecutionCycle logs list subtask progress with duration", async () 
   assert.equal(
     logs.some((log) =>
       log.message.includes(
-        "Task list-progress-task list progress: 1 of 2 done in 1.2s (status=done, attempts=1)",
+        "Task list-progress-task list progress: 1 of 2 done in 1.2s (status=done, attempts=1) [model=gpt-5.3-codex, listItem=en-US]",
       ),
     ),
     true,
@@ -214,7 +216,7 @@ test("runTaskExecutionCycle logs list subtask progress with duration", async () 
   assert.equal(
     logs.some((log) =>
       log.message.includes(
-        "🚀 Task list-progress-task list progress: 2 of 2 done in 8.2s (status=failed, attempts=2)",
+        "🚀 Task list-progress-task list progress: 2 of 2 done in 8.2s (status=failed, attempts=2) [model=gpt-5.3-codex, listItem=fr-FR]",
       ),
     ),
     true,
@@ -231,6 +233,67 @@ test("runTaskExecutionCycle logs list subtask progress with duration", async () 
   );
 });
 
+test("runTaskExecutionCycle truncates list item in progress logs to 30 symbols", async () => {
+  const apiClient = new FakeApiClient();
+  apiClient.queuedTasks = [
+    {
+      ...createTask("list-progress-truncate-task"),
+      listExecution: {
+        items: ["abcdefghijklmnopqrstuvwxyz123456789"],
+        listId: "ios-langs",
+      },
+      text: "Translate $list-ios-langs",
+    },
+  ];
+  apiClient.fiveHourUsage = [{ fiveHourUsedPercent: 50 }];
+
+  const scheduler = new TaskScheduler(1);
+  const activeWorkers = new Map<string, Promise<void>>();
+  const logs: Array<{ message: string; status: string }> = [];
+
+  await runTaskExecutionCycle({
+    activeWorkers,
+    apiClient,
+    logger: {
+      log(status, message): void {
+        logs.push({ message, status });
+      },
+    },
+    runningTasks: new Map(),
+    runningTaskScopeById: new Map(),
+    scheduler,
+    statusReporter: new StatusReporter(apiClient),
+    templates,
+    workerExecutor: async (task, _templates, context): Promise<TaskExecutionResult> => {
+      context?.onListSubtaskComplete?.({
+        attempts: 1,
+        current: 1,
+        durationMs: 1_000,
+        itemValue: "abcdefghijklmnopqrstuvwxyz123456789",
+        listId: "ios-langs",
+        status: "done",
+        taskId: task.id,
+        total: 1,
+      });
+      return {
+        finishedAt: new Date(),
+        fullResponse: "done",
+        status: "done",
+      };
+    },
+  });
+
+  await Promise.allSettled([...activeWorkers.values()]);
+  assert.equal(
+    logs.some((log) =>
+      log.message.includes(
+        "listItem=abcdefghijklmnopqrstuvwxyz1234...",
+      ),
+    ),
+    true,
+  );
+});
+
 test("runTaskExecutionCycle rejects tasks that reference multiple list types", async () => {
   const apiClient = new FakeApiClient();
   apiClient.queuedTasks = [
@@ -239,7 +302,7 @@ test("runTaskExecutionCycle rejects tasks that reference multiple list types", a
       text: "Run for $list-ios-langs and $list-country-codes",
     },
   ];
-  apiClient.fiveHourUsage = [50];
+  apiClient.fiveHourUsage = [{ fiveHourUsedPercent: 50 }];
 
   const scheduler = new TaskScheduler(1);
   const logs: Array<{ message: string; status: string }> = [];

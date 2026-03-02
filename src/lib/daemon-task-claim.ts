@@ -7,6 +7,10 @@ import { extractListIdsFromText } from "./list-tokens";
 
 const MAX_FETCH_LIMIT = 20;
 const MIN_FETCH_LIMIT = 1;
+const MODEL_CANONICAL_ALIASES: Readonly<Record<string, string>> = {
+  "codex-bengalfox": "gpt-5.3-codex-spark",
+  default: "gpt-5.3-codex",
+};
 
 type TaskWithContext = Prisma.TaskGetPayload<{
   include: {
@@ -29,6 +33,38 @@ function clampLimit(limit: number): number {
   }
 
   return Math.max(MIN_FETCH_LIMIT, Math.min(MAX_FETCH_LIMIT, Math.floor(limit)));
+}
+
+function toCanonicalModelIdentifier(value: string): string {
+  const canonical = value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
+    .replace(/-+/g, "-");
+  if (!canonical) {
+    return "";
+  }
+
+  return MODEL_CANONICAL_ALIASES[canonical] ?? canonical;
+}
+
+function normalizeDisallowedModels(models: string[] | undefined): string[] {
+  if (!Array.isArray(models) || models.length < 1) {
+    return [];
+  }
+
+  const normalized = new Set<string>();
+  for (const value of models) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const canonical = toCanonicalModelIdentifier(value);
+    if (canonical.length > 0) {
+      normalized.add(canonical);
+    }
+  }
+
+  return [...normalized];
 }
 
 function toDaemonTask(task: TaskWithContext): DaemonTask {
@@ -158,8 +194,13 @@ async function attachListExecutionContext(
   });
 }
 
-export async function claimNextTasksFromDb(limit: number): Promise<DaemonTask[]> {
+export async function claimNextTasksFromDb(
+  limit: number,
+  disallowedModels?: string[],
+): Promise<DaemonTask[]> {
   const normalizedLimit = clampLimit(limit);
+  const normalizedDisallowedModels = normalizeDisallowedModels(disallowedModels);
+  const disallowedModelSet = new Set(normalizedDisallowedModels);
   const now = new Date();
 
   return prisma.$transaction(async (tx) => {
@@ -206,10 +247,22 @@ export async function claimNextTasksFromDb(limit: number): Promise<DaemonTask[]>
       return [];
     }
 
-    const selected = candidates
-      .filter((candidate) => candidate.projectId === selectedProjectId)
-      .slice(0, normalizedLimit)
-      .map(toDaemonTask);
+    const selected: DaemonTask[] = [];
+    for (const candidate of candidates) {
+      if (candidate.projectId !== selectedProjectId) {
+        continue;
+      }
+
+      if (selected.length >= normalizedLimit) {
+        break;
+      }
+
+      if (disallowedModelSet.has(toCanonicalModelIdentifier(candidate.model))) {
+        break;
+      }
+
+      selected.push(toDaemonTask(candidate));
+    }
 
     if (selected.length < 1) {
       return [];

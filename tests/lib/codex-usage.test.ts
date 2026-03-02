@@ -23,7 +23,7 @@ test("extracts legacy usage payload into a single model summary", () => {
 
   const summaries = extractCodexUsageModelSummaries(payload);
   assert.equal(summaries.length, 1);
-  assert.equal(summaries[0]?.model, "default");
+  assert.equal(summaries[0]?.model, "gpt-5.3-codex");
   assert.equal(summaries[0]?.fiveHourUsedPercent, 22);
   assert.equal(summaries[0]?.fiveHourResetAt, new Date(1_700_000_000 * 1000).toISOString());
   assert.equal(summaries[0]?.weeklyUsedPercent, 17);
@@ -130,7 +130,7 @@ test("extracts additional rate limits into model summaries", () => {
 
   const summaries = extractCodexUsageModelSummaries(payload);
   assert.equal(summaries.length, 2);
-  assert.equal(summaries[0]?.model, "default");
+  assert.equal(summaries[0]?.model, "gpt-5.3-codex");
   assert.equal(summaries[1]?.model, "gpt-5.3-codex-spark");
   assert.equal(summaries[1]?.modelLabel, "GPT-5.3-Codex-Spark limit");
   assert.equal(summaries[1]?.fiveHourUsedPercent, 99);
@@ -246,6 +246,31 @@ test("maps internal model identifier to known spark model", () => {
   assert.equal(summaries.length, 1);
   assert.equal(summaries[0]?.model, "gpt-5.3-codex-spark");
   assert.equal(summaries[0]?.modelLabel, undefined);
+});
+
+test("maps default model identifier to gpt-5.3-codex", () => {
+  const payload: CodexUsagePayload = {
+    plan_type: "legacy-plan",
+    rate_limit: {
+      models: [
+        {
+          model: "default",
+          primary_window: {
+            used_percent: 33,
+            reset_at: 1_700_210_000,
+          },
+          secondary_window: {
+            used_percent: 44,
+            reset_at: 1_700_220_000,
+          },
+        },
+      ],
+    },
+  };
+
+  const summaries = extractCodexUsageModelSummaries(payload);
+  assert.equal(summaries.length, 1);
+  assert.equal(summaries[0]?.model, "gpt-5.3-codex");
 });
 
 test("extracts additional rate limits even if details embed windows directly", () => {

@@ -138,6 +138,110 @@ test("daemon claim endpoint drains tasks from the highest-priority active projec
   assert.deepEqual(secondPayload.tasks.map((task) => task.id), [projectTwoMainTask.id]);
 });
 
+test("daemon claim endpoint does not skip disallowed model at queue head", async () => {
+  await resetDatabase();
+
+  const project = await createProject("Model Filter Project");
+  await prisma.task.create({
+    data: {
+      model: "gpt-5.3-codex-spark",
+      priority: 0,
+      projectId: project.id,
+      text: "spark task",
+    },
+  });
+  await prisma.task.create({
+    data: {
+      model: "gpt-5.3-codex",
+      priority: 1,
+      projectId: project.id,
+      text: "codex task",
+    },
+  });
+
+  const response = await claimTasksPost(
+    new Request("http://localhost/api/daemon/tasks/claim", {
+      body: JSON.stringify({
+        disallowedModels: ["gpt-5.3-codex-spark"],
+        limit: 2,
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as { tasks: Array<{ id: string }> };
+  assert.deepEqual(payload.tasks, []);
+});
+
+test("daemon claim endpoint claims only contiguous tasks before first disallowed model", async () => {
+  await resetDatabase();
+
+  const project = await createProject("Model Prefix Project");
+  const firstCodexTask = await prisma.task.create({
+    data: {
+      model: "gpt-5.3-codex",
+      priority: 0,
+      projectId: project.id,
+      text: "first codex task",
+    },
+    select: { id: true },
+  });
+  await prisma.task.create({
+    data: {
+      model: "gpt-5.3-codex-spark",
+      priority: 1,
+      projectId: project.id,
+      text: "spark blocked task",
+    },
+  });
+  await prisma.task.create({
+    data: {
+      model: "gpt-5.3-codex",
+      priority: 2,
+      projectId: project.id,
+      text: "second codex task",
+    },
+  });
+
+  const response = await claimTasksPost(
+    new Request("http://localhost/api/daemon/tasks/claim", {
+      body: JSON.stringify({
+        disallowedModels: ["gpt-5.3-codex-spark"],
+        limit: 3,
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as { tasks: Array<{ id: string }> };
+  assert.deepEqual(payload.tasks.map((task) => task.id), [firstCodexTask.id]);
+});
+
+test("daemon claim endpoint rejects non-string disallowedModels values", async () => {
+  await resetDatabase();
+  await createProject("Invalid disallowedModels");
+
+  const response = await claimTasksPost(
+    new Request("http://localhost/api/daemon/tasks/claim", {
+      body: JSON.stringify({
+        disallowedModels: ["gpt-5.3-codex-spark", 123],
+        limit: 1,
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    }),
+  );
+
+  assert.equal(response.status, 400);
+  const payload = (await response.json()) as { error?: { code?: string; message?: string } };
+  assert.equal(payload.error?.code, "INVALID_PAYLOAD");
+  assert.equal(payload.error?.message?.includes("disallowedModels"), true);
+});
+
 test("daemon claim history includes only previous task texts, not codex responses", async () => {
   await resetDatabase();
 

@@ -9,6 +9,7 @@ import {
   DEFAULT_CODEX_AUTH_FILE,
   CODEX_USAGE_POLL_INTERVAL_MS,
   resolveCodexModelDisplayLabel,
+  resolveModelCardSortRank,
 } from "./content-helpers";
 import type { MainProjectsPageCoreState } from "./content-core-state";
 import type { ProjectTree } from "./content-helpers";
@@ -130,11 +131,17 @@ export const useMainProjectsPageLoaders = (state: MainProjectsPageCoreState): Ma
             ...model,
             displayLabel: resolveCodexModelDisplayLabel(model.model, model.modelLabel),
           }))
-          .sort((first, second) =>
-            resolveCodexModelDisplayLabel(first.model).localeCompare(
-              resolveCodexModelDisplayLabel(second.model),
-            ),
-          ),
+          .sort((first, second) => {
+            const firstRank = resolveModelCardSortRank(first.model);
+            const secondRank = resolveModelCardSortRank(second.model);
+            if (firstRank !== secondRank) {
+              return firstRank - secondRank;
+            }
+
+            return first.displayLabel.localeCompare(second.displayLabel, undefined, {
+              sensitivity: "base",
+            });
+          }),
       );
       setCodexWeeklyLimitUsedPercent(result.usage.weeklyUsedPercent ?? 0);
       setCodexFiveHourLimitUsedPercent(result.usage.fiveHourUsedPercent);

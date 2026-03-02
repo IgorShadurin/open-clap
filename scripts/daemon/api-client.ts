@@ -11,15 +11,21 @@ import type {
   DaemonTask,
   DaemonTaskStatus,
   ImmediateAction,
+  type CodexUsageModelSummary,
 } from "../../shared/contracts";
+
+export interface DaemonCodexUsageState {
+  fiveHourUsedPercent: number;
+  models?: CodexUsageModelSummary[];
+}
 
 export interface DaemonApiClient {
   acknowledgeImmediateAction(actionId: string): Promise<void>;
   completeImmediateAction(actionId: string): Promise<void>;
-  fetchCodexUsageState(): Promise<{ fiveHourUsedPercent: number } | null>;
+  fetchCodexUsageState(): Promise<DaemonCodexUsageState | null>;
   fetchRuntimeSettings(revision?: string): Promise<FetchDaemonSettingsResponse>;
   fetchImmediateActions(): Promise<ImmediateAction[]>;
-  fetchNextTasks(limit: number): Promise<DaemonTask[]>;
+  fetchNextTasks(limit: number, disallowedModels?: string[]): Promise<DaemonTask[]>;
   markTasksInProgress(taskIds: string[]): Promise<void>;
   reportTaskStatus(
     taskId: string,
@@ -39,7 +45,7 @@ export class NoopDaemonApiClient implements DaemonApiClient {
     return [];
   }
 
-  public async fetchCodexUsageState(): Promise<{ fiveHourUsedPercent: number } | null> {
+  public async fetchCodexUsageState(): Promise<DaemonCodexUsageState | null> {
     return null;
   }
 
@@ -54,8 +60,9 @@ export class NoopDaemonApiClient implements DaemonApiClient {
     void actionId;
   }
 
-  public async fetchNextTasks(limit: number): Promise<DaemonTask[]> {
+  public async fetchNextTasks(limit: number, disallowedModels?: string[]): Promise<DaemonTask[]> {
     void limit;
+    void disallowedModels;
     return [];
   }
 
@@ -124,7 +131,7 @@ export class HttpDaemonApiClient implements DaemonApiClient {
     return (await response.json()) as FetchDaemonSettingsResponse;
   }
 
-  public async fetchCodexUsageState(): Promise<{ fiveHourUsedPercent: number } | null> {
+  public async fetchCodexUsageState(): Promise<DaemonCodexUsageState | null> {
     const response = await fetch(`${this.baseUrl}/api/codex/usage`, {
       body: JSON.stringify({}),
       headers: {
@@ -142,6 +149,7 @@ export class HttpDaemonApiClient implements DaemonApiClient {
         ok: boolean;
         usage?: {
           fiveHourUsedPercent?: number;
+          models?: CodexUsageModelSummary[];
         };
       }>;
     };
@@ -150,7 +158,10 @@ export class HttpDaemonApiClient implements DaemonApiClient {
       return null;
     }
 
-    return { fiveHourUsedPercent: first.usage.fiveHourUsedPercent };
+    return {
+      fiveHourUsedPercent: first.usage.fiveHourUsedPercent,
+      ...(Array.isArray(first.usage.models) ? { models: first.usage.models } : {}),
+    };
   }
 
   public async completeImmediateAction(actionId: string): Promise<void> {
@@ -170,8 +181,11 @@ export class HttpDaemonApiClient implements DaemonApiClient {
     await response.json() as CompleteImmediateActionResponse;
   }
 
-  public async fetchNextTasks(limit: number): Promise<DaemonTask[]> {
-    const body: ClaimTasksRequest = { limit };
+  public async fetchNextTasks(limit: number, disallowedModels?: string[]): Promise<DaemonTask[]> {
+    const body: ClaimTasksRequest = {
+      limit,
+      ...(disallowedModels && disallowedModels.length > 0 ? { disallowedModels } : {}),
+    };
     const response = await fetch(`${this.baseUrl}/api/daemon/tasks/claim`, {
       body: JSON.stringify(body),
       headers: {

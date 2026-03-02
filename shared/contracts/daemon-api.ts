@@ -5,6 +5,7 @@ import type {
 } from "./task";
 
 export interface ClaimTasksRequest {
+  disallowedModels?: string[];
   limit: number;
 }
 

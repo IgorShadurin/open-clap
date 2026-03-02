@@ -47,7 +47,7 @@ export function limitProgressClass(percent: number): string {
 
 export function resolveCodexModelLabel(model: string): string {
   if (model === "default") {
-    return "⚙️ Classic";
+    return getTaskModelDisplayLabel("gpt-5.3-codex");
   }
 
   if (model === "gpt-5.3-codex-spark") {
@@ -200,15 +200,18 @@ export function isProjectCollapsedOnMainPage(project: ProjectTree): boolean {
 
 export function resolveModelCardSortRank(model: string): number {
   if (model === "default") {
+    return resolveModelCardSortRank("gpt-5.3-codex");
+  }
+  if (model === "gpt-5.3-codex") {
     return 0;
   }
   if (model === "gpt-5.3-codex-spark") {
-    return 0;
-  }
-  if (model.toLowerCase().includes("spark")) {
     return 1;
   }
-  return 2;
+  if (model.toLowerCase().includes("spark")) {
+    return 2;
+  }
+  return 3;
 }
 
 export type DeleteTaskTarget = {

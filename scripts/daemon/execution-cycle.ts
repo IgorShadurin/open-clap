@@ -5,14 +5,21 @@ import { TaskScheduler } from "./scheduler";
 import { StatusReporter } from "./status-reporter";
 import type { WorkerTemplates } from "./template-renderer";
 import type { TaskAuditLogger } from "./task-audit-log";
-import type { WaitFunction } from "./retry";
 import type { WorkerExecutionContext } from "./worker-types";
+import {
+  FIVE_HOUR_MIN_REMAINING_PERCENT,
+  fetchFiveHourUsageStateWithRetry,
+  isSparkModelIdentifier,
+  resolveSparkTaskExecutionModel,
+  type FiveHourUsageRetryOptions,
+  shouldAllowExecutionBasedOnFiveHourUsage,
+  toCanonicalModelIdentifier,
+} from "./execution-cycle-usage-gate";
 import {
   formatElapsedDuration,
   formatTimeoutDuration,
   resolveTaskExecutionTimeoutMs,
 } from "./task-timeout-config";
-import { DAEMON_RETRY_POLICY, retryAsync } from "./retry";
 import type { DaemonTask, TaskExecutionResult } from "../../shared/contracts/task";
 import { executeTask } from "./worker";
 import { getExecutionScopeKey } from "../../shared/logic/task-priority";
@@ -29,99 +36,31 @@ interface TaskControl extends RunningTaskControl {
   stopped: boolean;
 }
 
-const FIVE_HOUR_MIN_REMAINING_PERCENT = 2;
-
-interface FiveHourUsageRetryOptions {
-  attempts?: number;
-  delayMs?: number;
-  wait?: WaitFunction;
+interface FallbackExecutionMetadata {
+  fromModel: string;
+  fromReasoning: string;
+  toModel: string;
+  toReasoning: string;
 }
 
-function computeRemainingFiveHourPercent(usage: {
-  fiveHourUsedPercent?: number;
-}): number | null {
-  const usedPercent = usage.fiveHourUsedPercent;
-  if (typeof usedPercent !== "number" || !Number.isFinite(usedPercent)) {
-    return null;
+const MAX_LIST_LOG_ITEM_SYMBOLS = 30;
+
+function formatListItemForLog(itemValue: string | null | undefined): string {
+  if (typeof itemValue !== "string") {
+    return "n/a";
   }
 
-  return Math.max(0, Math.min(100, 100 - usedPercent));
-}
-
-async function shouldAllowExecutionBasedOnFiveHourUsage(
-  apiClient: DaemonApiClient,
-  logger: LoggerLike,
-  retryOptions: FiveHourUsageRetryOptions = {},
-): Promise<boolean> {
-  const attempts = Number.isFinite(retryOptions.attempts)
-    ? Math.max(1, Math.floor(retryOptions.attempts ?? 1))
-    : DAEMON_RETRY_POLICY.attempts;
-  const delayMs = Number.isFinite(retryOptions.delayMs)
-    ? Math.max(0, Math.floor(retryOptions.delayMs ?? 0))
-    : DAEMON_RETRY_POLICY.delayMs;
-
-  try {
-    const usage = await retryAsync(async () => {
-      let fetchedUsage: { fiveHourUsedPercent: number } | null;
-      try {
-        fetchedUsage = await apiClient.fetchCodexUsageState();
-      } catch {
-        throw new Error("metrics_fetch_failed");
-      }
-      if (!fetchedUsage) {
-        throw new Error("metrics_unavailable");
-      }
-
-      const remainingPercent = computeRemainingFiveHourPercent(fetchedUsage);
-      if (remainingPercent === null) {
-        throw new Error("metrics_invalid");
-      }
-
-      return fetchedUsage;
-    }, {
-      attempts,
-      delayMs,
-      wait: retryOptions.wait,
-    });
-    const remainingPercent = computeRemainingFiveHourPercent(usage);
-    if (remainingPercent === null) {
-      logger.log(
-        "waiting",
-        `Execution paused: 5h usage values are invalid after ${attempts} attempts`,
-      );
-      return false;
-    }
-
-    if (remainingPercent < FIVE_HOUR_MIN_REMAINING_PERCENT) {
-      logger.log(
-        "waiting",
-        `Execution paused: 5h limit remaining ${remainingPercent.toFixed(1)}%`,
-      );
-      return false;
-    }
-    return true;
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    if (reason === "metrics_invalid") {
-      logger.log(
-        "waiting",
-        `Execution paused: 5h usage values are invalid after ${attempts} attempts`,
-      );
-      return false;
-    }
-    if (reason === "metrics_fetch_failed") {
-      logger.log(
-        "waiting",
-        `Execution paused: 5h usage check failed after ${attempts} attempts`,
-      );
-      return false;
-    }
-    logger.log(
-      "waiting",
-      `Execution paused: 5h usage metrics unavailable after ${attempts} attempts`,
-    );
-    return false;
+  const normalized = itemValue.replace(/\s+/g, " ").trim();
+  if (normalized.length < 1) {
+    return "n/a";
   }
+
+  const symbols = [...normalized];
+  if (symbols.length <= MAX_LIST_LOG_ITEM_SYMBOLS) {
+    return normalized;
+  }
+
+  return `${symbols.slice(0, MAX_LIST_LOG_ITEM_SYMBOLS).join("")}...`;
 }
 
 export interface RunTaskExecutionCycleOptions {
@@ -167,17 +106,34 @@ export async function runTaskExecutionCycle({
 }: RunTaskExecutionCycleOptions): Promise<ExecutionCycleResult> {
   const slotsRequested = scheduler.availableSlots();
   if (slotsRequested < 1) {
-    logger.log("waiting", "No free execution slots");
+    if (activeWorkers.size < 1 && runningTasks.size < 1) {
+      logger.log("waiting", "No free execution slots");
+    }
     return { fetched: 0, slotsRequested, started: 0 };
   }
 
-  if (!(await shouldAllowExecutionBasedOnFiveHourUsage(apiClient, logger, fiveHourUsageRetry))) {
+  const fiveHourUsageGate = await shouldAllowExecutionBasedOnFiveHourUsage(
+    apiClient,
+    logger,
+    fiveHourUsageRetry,
+  );
+  if (!fiveHourUsageGate.allowClaiming) {
     return { fetched: 0, slotsRequested, started: 0 };
   }
 
-  const fetchedTasks = await apiClient.fetchNextTasks(slotsRequested);
+  const fetchedTasks = await apiClient.fetchNextTasks(
+    slotsRequested,
+    fiveHourUsageGate.disallowedModels,
+  );
   if (fetchedTasks.length < 1) {
-    logger.log("waiting", "No queued tasks available");
+    if (fiveHourUsageGate.disallowedModels.length > 0) {
+      logger.log(
+        "waiting",
+        `No eligible queued tasks without skipping model-limited tasks (5h remaining >= ${FIVE_HOUR_MIN_REMAINING_PERCENT}%)`,
+      );
+    } else {
+      logger.log("waiting", "No queued tasks available");
+    }
     return { fetched: 0, slotsRequested, started: 0 };
   }
 
@@ -228,12 +184,44 @@ export async function runTaskExecutionCycle({
       );
     }
 
+    let executionTask = task;
+    let fallbackExecutionMetadata: FallbackExecutionMetadata | null = null;
+    const normalizedTaskModel = toCanonicalModelIdentifier(task.model);
+    if (isSparkModelIdentifier(normalizedTaskModel)) {
+      try {
+        const usageForFallbackCheck = await fetchFiveHourUsageStateWithRetry(
+          apiClient,
+          fiveHourUsageRetry,
+        );
+        const fallbackResolution = resolveSparkTaskExecutionModel(
+          task.model,
+          task.reasoning,
+          usageForFallbackCheck,
+        );
+        if (fallbackResolution.fallbackFromModel && fallbackResolution.fallbackFromReasoning) {
+          executionTask = {
+            ...task,
+            model: fallbackResolution.model,
+            reasoning: fallbackResolution.reasoning,
+          };
+          fallbackExecutionMetadata = {
+            fromModel: fallbackResolution.fallbackFromModel,
+            fromReasoning: fallbackResolution.fallbackFromReasoning,
+            toModel: fallbackResolution.model,
+            toReasoning: fallbackResolution.reasoning,
+          };
+        }
+      } catch {
+        executionTask = task;
+      }
+    }
+
     const scopeKey = getExecutionScopeKey(task);
     const abortController = new AbortController();
-    const rawTaskTimeoutMs = resolveTaskTimeoutMs(task);
+    const rawTaskTimeoutMs = resolveTaskTimeoutMs(executionTask);
     const taskTimeoutMs = Number.isFinite(rawTaskTimeoutMs) && rawTaskTimeoutMs > 0
       ? Math.floor(rawTaskTimeoutMs)
-      : resolveTaskExecutionTimeoutMs(task);
+      : resolveTaskExecutionTimeoutMs(executionTask);
 
     const control: TaskControl = {
       stopped: false,
@@ -263,17 +251,28 @@ export async function runTaskExecutionCycle({
 
     runningTasks.set(task.id, control);
     runningTaskScopeById.set(task.id, scopeKey);
+    if (fallbackExecutionMetadata) {
+      logger.log(
+        "running",
+        `Task ${task.id} will run with fallback model ${fallbackExecutionMetadata.toModel} (${fallbackExecutionMetadata.toReasoning}) ` +
+          `from ${fallbackExecutionMetadata.fromModel} (${fallbackExecutionMetadata.fromReasoning})`,
+      );
+    }
 
     const workerPromise = (async () => {
       try {
-        const result = await workerExecutor(task, templates, {
+        const result = await workerExecutor(executionTask, templates, {
           auditLogger: taskAuditLogger,
           codexCommandTemplate,
           onListSubtaskComplete: (event) => {
             const duration = formatElapsedDuration(event.durationMs);
+            const listItem = formatListItemForLog(event.itemValue);
+            const modelInfo = fallbackExecutionMetadata
+              ? `[model=${executionTask.model}, fallbackFrom=${fallbackExecutionMetadata.fromModel}, listItem=${listItem}]`
+              : `[model=${executionTask.model}, listItem=${listItem}]`;
             const progressDetails =
               `Task ${task.id} list progress: ${event.current} of ${event.total} done in ` +
-              `${duration} (status=${event.status}, attempts=${event.attempts})`;
+              `${duration} (status=${event.status}, attempts=${event.attempts}) ${modelInfo}`;
             if (event.status === "failed") {
               logger.log("failed", `🚀 ${progressDetails}`);
             } else {
@@ -303,8 +302,8 @@ export async function runTaskExecutionCycle({
             );
             taskAuditLogger?.log("failure", "Task execution timed out; abort requested", {
               attempt: event.attempt,
-              model: task.model,
-              reasoning: task.reasoning,
+              model: executionTask.model,
+              reasoning: executionTask.reasoning,
               taskId: task.id,
               timeoutMs: event.timeoutMs,
               variantLabel: event.variantLabel,
@@ -319,7 +318,18 @@ export async function runTaskExecutionCycle({
         }
 
         await statusReporter.report(task.id, result.status, result.fullResponse);
-        logger.log(result.status === "done" ? "done" : "failed", `Task ${task.id} ${result.status}`);
+        if (result.status === "done" && fallbackExecutionMetadata) {
+          logger.log(
+            "done",
+            `Task ${task.id} done with fallback model ${fallbackExecutionMetadata.toModel} (${fallbackExecutionMetadata.toReasoning}) ` +
+              `from ${fallbackExecutionMetadata.fromModel} (${fallbackExecutionMetadata.fromReasoning})`,
+          );
+        } else {
+          logger.log(
+            result.status === "done" ? "done" : "failed",
+            `Task ${task.id} ${result.status}`,
+          );
+        }
       } catch (error) {
         if (control.stopped) {
           return;

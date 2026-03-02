@@ -5,6 +5,7 @@ assertTestDatabaseGuard();
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { DaemonCodexUsageState } from "../../scripts/daemon/api-client";
 import type { DaemonApiClient } from "../../scripts/daemon/api-client";
 import { handleImmediateActions } from "../../scripts/daemon/immediate-action-handler";
 import type { FetchDaemonSettingsResponse } from "../../shared/contracts";
@@ -33,7 +34,7 @@ class FakeApiClient implements DaemonApiClient {
     };
   }
 
-  public async fetchCodexUsageState(): Promise<{ fiveHourUsedPercent: number } | null> {
+  public async fetchCodexUsageState(): Promise<DaemonCodexUsageState | null> {
     return null;
   }
 
@@ -41,8 +42,9 @@ class FakeApiClient implements DaemonApiClient {
     this.completedActionIds.push(actionId);
   }
 
-  public async fetchNextTasks(limit: number): Promise<DaemonTask[]> {
+  public async fetchNextTasks(limit: number, disallowedModels?: string[]): Promise<DaemonTask[]> {
     void limit;
+    void disallowedModels;
     return [];
   }
 

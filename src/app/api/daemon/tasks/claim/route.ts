@@ -26,6 +26,20 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  const tasks = await claimNextTasks(body.limit);
+  if (
+    body.disallowedModels !== undefined &&
+    (!Array.isArray(body.disallowedModels) ||
+      body.disallowedModels.some((value) => typeof value !== "string"))
+  ) {
+    return NextResponse.json<ApiErrorShape>(
+      createApiError(
+        "INVALID_PAYLOAD",
+        "Field `disallowedModels` must be an array of strings",
+      ),
+      { status: 400 },
+    );
+  }
+
+  const tasks = await claimNextTasks(body.limit, body.disallowedModels);
   return NextResponse.json<ClaimTasksResponse>({ tasks }, { status: 200 });
 }

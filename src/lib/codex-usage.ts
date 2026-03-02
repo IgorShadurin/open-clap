@@ -167,6 +167,7 @@ function toCanonicalModelIdentifier(value: string | null | undefined): string {
 
 const USAGE_MODEL_CANONICAL_ALIASES: Readonly<Record<string, string>> = {
   "codex-bengalfox": "gpt-5.3-codex-spark",
+  default: "gpt-5.3-codex",
 };
 
 function normalizeUsageModelName(value: string | null | undefined): string {
@@ -266,7 +267,7 @@ function inferSingleModelSummary(
     allowed: defaultModelMeta.allowed,
     fiveHourResetAt: primaryWindow?.resetAt ?? "n/a",
     fiveHourUsedPercent: primaryWindow?.usedPercent ?? 0,
-    model: "default",
+    model: "gpt-5.3-codex",
     planType: defaultModelMeta.planType,
     weeklyResetAt: secondaryWindow?.resetAt ?? "n/a",
     weeklyUsedPercent: secondaryWindow ? secondaryWindow.usedPercent : null,
@@ -437,7 +438,9 @@ export function extractCodexUsageModelSummaries(
     allowed: defaultModelMeta.allowed,
     planType: defaultModelMeta.planType,
   });
-  const fallbackModel = readString((payload as UnknownRecord).model) ?? readString(rateLimit.model);
+  const fallbackModel = normalizeUsageModelName(
+    readString((payload as UnknownRecord).model) ?? readString(rateLimit.model),
+  );
   if (fallbackModel) {
     return [{ ...fallback, model: fallbackModel }];
   }

@@ -21,8 +21,11 @@ function toImmediateAction(action: {
   };
 }
 
-export async function claimNextTasks(limit: number): Promise<DaemonTask[]> {
-  const claimedTasks = await claimNextTasksFromDb(limit);
+export async function claimNextTasks(
+  limit: number,
+  disallowedModels?: string[],
+): Promise<DaemonTask[]> {
+  const claimedTasks = await claimNextTasksFromDb(limit, disallowedModels);
 
   if (claimedTasks.length > 0) {
     publishAppSync("task.claimed");

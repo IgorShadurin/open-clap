@@ -4,11 +4,12 @@ assertTestDatabaseGuard();
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { DaemonCodexUsageState } from "../../scripts/daemon/api-client";
 import type { DaemonApiClient } from "../../scripts/daemon/api-client";
 import { runTaskExecutionCycle } from "../../scripts/daemon/execution-cycle";
 import { TaskScheduler } from "../../scripts/daemon/scheduler";
 import { StatusReporter } from "../../scripts/daemon/status-reporter";
-import type { FetchDaemonSettingsResponse } from "../../shared/contracts";
+import type { CodexUsageModelSummary, FetchDaemonSettingsResponse } from "../../shared/contracts";
 import type {
   DaemonTask,
   DaemonTaskStatus,
@@ -19,6 +20,7 @@ import type {
 class FakeApiClient implements DaemonApiClient {
   public readonly acknowledgedActions: string[] = [];
   public readonly fetchCalls: number[] = [];
+  public readonly fetchDisallowedModels: string[][] = [];
   public readonly inProgressCalls: string[][] = [];
   public readonly statusCalls: Array<{
     taskId: string;
@@ -26,7 +28,7 @@ class FakeApiClient implements DaemonApiClient {
     fullResponse?: string;
   }> = [];
   public queuedTasks: DaemonTask[] = [];
-  public fiveHourUsage: Array<number | null | Error> = [];
+  public fiveHourUsage: Array<DaemonCodexUsageState | null | Error> = [];
   public fiveHourUsageFetchCount = 0;
 
   public async acknowledgeImmediateAction(actionId: string): Promise<void> {
@@ -44,26 +46,38 @@ class FakeApiClient implements DaemonApiClient {
     };
   }
 
-  public async fetchCodexUsageState(): Promise<{ fiveHourUsedPercent: number } | null> {
+  public async fetchCodexUsageState(): Promise<DaemonCodexUsageState | null> {
     this.fiveHourUsageFetchCount += 1;
     const usage = this.fiveHourUsage.shift();
     if (usage instanceof Error) {
       throw usage;
     }
-    if (typeof usage !== "number") {
+    if (!usage) {
       return null;
     }
 
-    return { fiveHourUsedPercent: usage };
+    return usage;
   }
 
   public async completeImmediateAction(actionId: string): Promise<void> {
     void actionId;
   }
 
-  public async fetchNextTasks(limit: number): Promise<DaemonTask[]> {
+  public async fetchNextTasks(limit: number, disallowedModels?: string[]): Promise<DaemonTask[]> {
     this.fetchCalls.push(limit);
-    return this.queuedTasks.slice(0, limit);
+    const disallowedSet = new Set((disallowedModels ?? []).map((value) => value.toLowerCase()));
+    this.fetchDisallowedModels.push([...disallowedSet]);
+    const selected: DaemonTask[] = [];
+    for (const task of this.queuedTasks) {
+      if (selected.length >= limit) {
+        break;
+      }
+      if (disallowedSet.has(task.model.toLowerCase())) {
+        break;
+      }
+      selected.push(task);
+    }
+    return selected;
   }
 
   public async markTasksInProgress(taskIds: string[]): Promise<void> {
@@ -96,10 +110,25 @@ function createTask(taskId: string): DaemonTask {
   };
 }
 
+function createModelSummary(
+  model: string,
+  fiveHourUsedPercent: number,
+): CodexUsageModelSummary {
+  return {
+    allowed: true,
+    fiveHourResetAt: "n/a",
+    fiveHourUsedPercent,
+    model,
+    planType: "plus",
+    weeklyResetAt: "n/a",
+    weeklyUsedPercent: 0,
+  };
+}
+
 test("runTaskExecutionCycle fetches by free slots and reports task completion", async () => {
   const apiClient = new FakeApiClient();
   apiClient.queuedTasks = [createTask("t1"), createTask("t2"), createTask("t3")];
-  apiClient.fiveHourUsage = [50];
+  apiClient.fiveHourUsage = [{ fiveHourUsedPercent: 50 }];
 
   const scheduler = new TaskScheduler(2);
   const runningTasks = new Map();
@@ -145,7 +174,7 @@ test("runTaskExecutionCycle fetches by free slots and reports task completion", 
 
 test("runTaskExecutionCycle skips fetching when there is no capacity", async () => {
   const apiClient = new FakeApiClient();
-  apiClient.fiveHourUsage = [50];
+  apiClient.fiveHourUsage = [{ fiveHourUsedPercent: 50 }];
   const scheduler = new TaskScheduler(1);
   scheduler.startTask("occupied");
 
@@ -170,6 +199,43 @@ test("runTaskExecutionCycle skips fetching when there is no capacity", async () 
   assert.deepEqual(apiClient.inProgressCalls, []);
 });
 
+test("runTaskExecutionCycle does not log free-slot warning when a task is already running", async () => {
+  const apiClient = new FakeApiClient();
+  const scheduler = new TaskScheduler(1);
+  scheduler.startTask("occupied");
+
+  const activeWorkers = new Map<string, Promise<void>>();
+  activeWorkers.set("occupied", Promise.resolve());
+  const runningTasks = new Map<string, { forceStop: () => Promise<void> | void }>();
+  runningTasks.set("occupied", {
+    forceStop: () => {},
+  });
+
+  const logs: Array<{ message: string; status: string }> = [];
+  const result = await runTaskExecutionCycle({
+    activeWorkers,
+    apiClient,
+    logger: {
+      log(status, message): void {
+        logs.push({ message, status });
+      },
+    },
+    runningTasks,
+    runningTaskScopeById: new Map(),
+    scheduler,
+    statusReporter: new StatusReporter(apiClient),
+    templates,
+    workerExecutor: async (task) => ({
+      finishedAt: new Date(),
+      fullResponse: `Fake worker response for ${task.id}`,
+      status: "done",
+    }),
+  });
+
+  assert.deepEqual(result, { fetched: 0, slotsRequested: 0, started: 0 });
+  assert.equal(logs.some((entry) => entry.message.includes("No free execution slots")), false);
+});
+
 test("runTaskExecutionCycle starts fetched tasks in claim order when capacity allows", async () => {
   const apiClient = new FakeApiClient();
   apiClient.queuedTasks = [
@@ -191,7 +257,7 @@ test("runTaskExecutionCycle starts fetched tasks in claim order when capacity al
     }
     return { ...task, projectId: "p1", subprojectId: null };
   });
-  apiClient.fiveHourUsage = [50];
+  apiClient.fiveHourUsage = [{ fiveHourUsedPercent: 50 }];
 
   const scheduler = new TaskScheduler(10);
   const result = await runTaskExecutionCycle({
@@ -214,7 +280,7 @@ test("runTaskExecutionCycle starts fetched tasks in claim order when capacity al
 test("runTaskExecutionCycle force-stop prevents duplicate done status", async () => {
   const apiClient = new FakeApiClient();
   apiClient.queuedTasks = [createTask("force-stop-task")];
-  apiClient.fiveHourUsage = [50];
+  apiClient.fiveHourUsage = [{ fiveHourUsedPercent: 50 }];
 
   const scheduler = new TaskScheduler(1);
   const runningTasks = new Map();
@@ -266,7 +332,7 @@ test("runTaskExecutionCycle force-stop prevents duplicate done status", async ()
 test("runTaskExecutionCycle waits when 5h remaining is below threshold", async () => {
   const apiClient = new FakeApiClient();
   apiClient.queuedTasks = [createTask("low-limit-task")];
-  apiClient.fiveHourUsage = [99];
+  apiClient.fiveHourUsage = [{ fiveHourUsedPercent: 99 }];
 
   const scheduler = new TaskScheduler(1);
   const logs: Array<{ message: string; status: string }> = [];
@@ -296,6 +362,238 @@ test("runTaskExecutionCycle waits when 5h remaining is below threshold", async (
   assert.equal(logs.some((log) => log.status === "waiting"), true);
   assert.equal(logs.some((log) => log.message.includes("5h limit remaining")), true);
 });
+
+test("runTaskExecutionCycle does not skip head task when spark has no limits and fallback is unavailable", async () => {
+  const apiClient = new FakeApiClient();
+  apiClient.queuedTasks = [
+    {
+      ...createTask("spark-task"),
+      model: "gpt-5.3-codex-spark",
+    },
+    {
+      ...createTask("codex-task"),
+      model: "gpt-5.3-codex",
+    },
+  ];
+  apiClient.fiveHourUsage = [{
+    fiveHourUsedPercent: 50,
+    models: [
+      createModelSummary("gpt-5.3-codex-spark", 99.6),
+      createModelSummary("gpt-5.3-codex", 99.4),
+    ],
+  }];
+
+  const scheduler = new TaskScheduler(2);
+  const activeWorkers = new Map<string, Promise<void>>();
+
+  const result = await runTaskExecutionCycle({
+    activeWorkers,
+    apiClient,
+    logger: { log: () => {} },
+    runningTasks: new Map(),
+    runningTaskScopeById: new Map(),
+    scheduler,
+    statusReporter: new StatusReporter(apiClient),
+    templates,
+    workerExecutor: async () => ({
+      finishedAt: new Date(),
+      fullResponse: "Fake worker response",
+      status: "done",
+    }),
+  });
+
+  assert.deepEqual(result, { fetched: 0, slotsRequested: 2, started: 0 });
+  assert.deepEqual(apiClient.fetchDisallowedModels, []);
+  assert.deepEqual(apiClient.inProgressCalls, []);
+  await Promise.allSettled([...activeWorkers.values()]);
+});
+
+test("runTaskExecutionCycle starts spark task with fallback model when spark is limited", async () => {
+  const apiClient = new FakeApiClient();
+  apiClient.queuedTasks = [
+    {
+      ...createTask("spark-task-1"),
+      model: "gpt-5.3-codex-spark",
+    },
+  ];
+  apiClient.fiveHourUsage = [{
+    fiveHourUsedPercent: 50,
+    models: [
+      createModelSummary("gpt-5.3-codex-spark", 99.6),
+      createModelSummary("gpt-5.3-codex", 70),
+    ],
+  }, {
+    fiveHourUsedPercent: 50,
+    models: [
+      createModelSummary("gpt-5.3-codex-spark", 99.6),
+      createModelSummary("gpt-5.3-codex", 70),
+    ],
+  }];
+
+  const scheduler = new TaskScheduler(1);
+  const activeWorkers = new Map<string, Promise<void>>();
+  const logs: Array<{ message: string; status: string }> = [];
+  const executedModels: string[] = [];
+  const executedReasonings: string[] = [];
+
+  const result = await runTaskExecutionCycle({
+    activeWorkers,
+    apiClient,
+    logger: {
+      log(status, message): void {
+        logs.push({ message, status });
+      },
+    },
+    runningTasks: new Map(),
+    runningTaskScopeById: new Map(),
+    scheduler,
+    statusReporter: new StatusReporter(apiClient),
+    templates,
+    workerExecutor: async (task) => {
+      executedModels.push(task.model);
+      executedReasonings.push(task.reasoning);
+      return {
+        finishedAt: new Date(),
+        fullResponse: "Fake worker response",
+        status: "done",
+      };
+    },
+  });
+
+  assert.deepEqual(result, { fetched: 1, slotsRequested: 1, started: 1 });
+  assert.deepEqual(apiClient.fetchDisallowedModels, [[]]);
+  assert.deepEqual(apiClient.inProgressCalls, [["spark-task-1"]]);
+  await Promise.allSettled([...activeWorkers.values()]);
+  assert.deepEqual(executedModels, ["gpt-5.3-codex"]);
+  assert.deepEqual(executedReasonings, ["medium"]);
+  assert.equal(
+    logs.some((entry) =>
+      entry.message.includes(
+        "Task spark-task-1 will run with fallback model gpt-5.3-codex (medium) from gpt-5.3-codex-spark (high)",
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    logs.some((entry) =>
+      entry.message.includes(
+        "Task spark-task-1 done with fallback model gpt-5.3-codex (medium) from gpt-5.3-codex-spark (high)",
+      ),
+    ),
+    true,
+  );
+  assert.equal(
+    logs.filter((entry) => entry.status === "done" && entry.message.includes("Task spark-task-1")).length,
+    1,
+  );
+});
+
+test("runTaskExecutionCycle pauses when all model-specific 5h limits are below 2%", async () => {
+  const apiClient = new FakeApiClient();
+  apiClient.queuedTasks = [createTask("all-blocked-task")];
+  apiClient.fiveHourUsage = [{
+    fiveHourUsedPercent: 50,
+    models: [
+      createModelSummary("gpt-5.3-codex-spark", 99.7),
+      createModelSummary("gpt-5.3-codex", 99.5),
+    ],
+  }];
+
+  const scheduler = new TaskScheduler(1);
+  const logs: Array<{ message: string; status: string }> = [];
+
+  const result = await runTaskExecutionCycle({
+    activeWorkers: new Map(),
+    apiClient,
+    logger: {
+      log(status, message): void {
+        logs.push({ message, status });
+      },
+    },
+    runningTasks: new Map(),
+    runningTaskScopeById: new Map(),
+    scheduler,
+    statusReporter: new StatusReporter(apiClient),
+    templates,
+    workerExecutor: async () => ({
+      finishedAt: new Date(),
+      fullResponse: "",
+      status: "done",
+    }),
+  });
+
+  assert.deepEqual(result, { fetched: 0, slotsRequested: 1, started: 0 });
+  assert.deepEqual(apiClient.fetchCalls, []);
+  assert.equal(
+    logs.some((log) => log.message.includes("5h model limits are below 2% for all available models")),
+    true,
+  );
+});
+
+test("runTaskExecutionCycle re-checks spark fallback for each task and does not remember fallback", async () => {
+  const apiClient = new FakeApiClient();
+  apiClient.queuedTasks = [
+    {
+      ...createTask("spark-task-1"),
+      model: "gpt-5.3-codex-spark",
+    },
+    {
+      ...createTask("spark-task-2"),
+      model: "gpt-5.3-codex-spark",
+    },
+  ];
+  apiClient.fiveHourUsage = [{
+    fiveHourUsedPercent: 50,
+    models: [
+      createModelSummary("gpt-5.3-codex-spark", 99.6),
+      createModelSummary("gpt-5.3-codex", 70),
+    ],
+  }, {
+    fiveHourUsedPercent: 50,
+    models: [
+      createModelSummary("gpt-5.3-codex-spark", 99.6),
+      createModelSummary("gpt-5.3-codex", 70),
+    ],
+  }, {
+    fiveHourUsedPercent: 50,
+    models: [
+      createModelSummary("gpt-5.3-codex-spark", 20),
+      createModelSummary("gpt-5.3-codex", 70),
+    ],
+  }];
+
+  const scheduler = new TaskScheduler(2);
+  const activeWorkers = new Map<string, Promise<void>>();
+  const executedModels: string[] = [];
+  const executedTaskIds: string[] = [];
+
+  const result = await runTaskExecutionCycle({
+    activeWorkers,
+    apiClient,
+    logger: { log: () => {} },
+    runningTasks: new Map(),
+    runningTaskScopeById: new Map(),
+    scheduler,
+    statusReporter: new StatusReporter(apiClient),
+    templates,
+    workerExecutor: async (task) => {
+      executedTaskIds.push(task.id);
+      executedModels.push(task.model);
+      return {
+        finishedAt: new Date(),
+        fullResponse: "Fake worker response",
+        status: "done",
+      };
+    },
+  });
+
+  assert.deepEqual(result, { fetched: 2, slotsRequested: 2, started: 2 });
+  await Promise.allSettled([...activeWorkers.values()]);
+  assert.deepEqual(executedTaskIds, ["spark-task-1", "spark-task-2"]);
+  assert.deepEqual(executedModels, ["gpt-5.3-codex", "gpt-5.3-codex-spark"]);
+  assert.equal(apiClient.fiveHourUsageFetchCount, 3);
+});
+
 test("runTaskExecutionCycle waits when usage metrics are unavailable", async () => {
   const apiClient = new FakeApiClient();
   apiClient.queuedTasks = [createTask("metric-unknown-task")];
@@ -339,7 +637,7 @@ test("runTaskExecutionCycle waits when usage metrics are unavailable", async () 
 test("runTaskExecutionCycle retries 5h usage checks and starts once usage is available", async () => {
   const apiClient = new FakeApiClient();
   apiClient.queuedTasks = [createTask("retry-then-run-task")];
-  apiClient.fiveHourUsage = [null, new Error("fetch failed"), 96];
+  apiClient.fiveHourUsage = [null, new Error("fetch failed"), { fiveHourUsedPercent: 96 }];
   const scheduler = new TaskScheduler(1);
   const activeWorkers = new Map<string, Promise<void>>();
   const waits: number[] = [];
@@ -375,7 +673,7 @@ test("runTaskExecutionCycle retries 5h usage checks and starts once usage is ava
 test("runTaskExecutionCycle resumes when 5h remaining rises above threshold", async () => {
   const apiClient = new FakeApiClient();
   apiClient.queuedTasks = [createTask("ok-task")];
-  apiClient.fiveHourUsage = [96];
+  apiClient.fiveHourUsage = [{ fiveHourUsedPercent: 96 }];
   const scheduler = new TaskScheduler(1);
   const activeWorkers = new Map<string, Promise<void>>();
   const result = await runTaskExecutionCycle({

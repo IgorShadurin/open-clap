@@ -5,6 +5,7 @@ assertTestDatabaseGuard();
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type { DaemonCodexUsageState } from "../../scripts/daemon/api-client";
 import type { DaemonApiClient } from "../../scripts/daemon/api-client";
 import { runTaskExecutionCycle } from "../../scripts/daemon/execution-cycle";
 import { TaskScheduler } from "../../scripts/daemon/scheduler";
@@ -27,7 +28,7 @@ class FakeApiClient implements DaemonApiClient {
     taskId: string;
   }> = [];
   public queuedTasks: DaemonTask[] = [];
-  public fiveHourUsage: Array<number | null | Error> = [];
+  public fiveHourUsage: Array<DaemonCodexUsageState | null | Error> = [];
 
   public async acknowledgeImmediateAction(actionId: string): Promise<void> {
     void actionId;
@@ -48,19 +49,20 @@ class FakeApiClient implements DaemonApiClient {
     };
   }
 
-  public async fetchCodexUsageState(): Promise<{ fiveHourUsedPercent: number } | null> {
+  public async fetchCodexUsageState(): Promise<DaemonCodexUsageState | null> {
     const usage = this.fiveHourUsage.shift();
     if (usage instanceof Error) {
       throw usage;
     }
-    if (typeof usage !== "number") {
+    if (!usage) {
       return null;
     }
-    return { fiveHourUsedPercent: usage };
+    return usage;
   }
 
-  public async fetchNextTasks(limit: number): Promise<DaemonTask[]> {
+  public async fetchNextTasks(limit: number, disallowedModels?: string[]): Promise<DaemonTask[]> {
     this.fetchCalls.push(limit);
+    void disallowedModels;
     return this.queuedTasks.slice(0, limit);
   }
 
@@ -97,7 +99,7 @@ function createTask(taskId: string): DaemonTask {
 test("runTaskExecutionCycle logs and records worker-reported command timeouts", async () => {
   const apiClient = new FakeApiClient();
   apiClient.queuedTasks = [createTask("timeout-task")];
-  apiClient.fiveHourUsage = [50];
+  apiClient.fiveHourUsage = [{ fiveHourUsedPercent: 50 }];
 
   const scheduler = new TaskScheduler(1);
   const runningTasks = new Map();
