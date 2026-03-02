@@ -26,6 +26,7 @@ import {
   DEFAULT_TASK_MODEL,
   DEFAULT_TASK_REASONING,
 } from "@/lib/task-reasoning";
+import { getTaskListTypeValidationError } from "@/lib/list-tokens";
 import { clearTaskFormPreferences } from "@/lib/task-form-preferences";
 import { canEditTask, extractApiErrorMessage } from "./helpers";
 import { Badge } from "../ui/badge";
@@ -459,6 +460,13 @@ export function AppDashboard() {
 
   const createTaskForScope = async (projectId: string, subprojectId: string | null) => {
     const key = scopeKey(projectId, subprojectId);
+    const taskText = newTaskText[key] ?? "";
+    const listTypeValidationError = getTaskListTypeValidationError(taskText);
+    if (listTypeValidationError) {
+      setErrorMessage(listTypeValidationError);
+      return;
+    }
+
     try {
       await requestJson("/api/tasks", {
         body: JSON.stringify({
@@ -468,7 +476,7 @@ export function AppDashboard() {
           projectId,
           reasoning: newTaskReasoning[key] ?? DEFAULT_REASONING,
           subprojectId,
-          text: newTaskText[key] ?? "",
+          text: taskText,
         }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
@@ -514,6 +522,12 @@ export function AppDashboard() {
 
   const submitTaskEdit = async () => {
     if (!editTaskTarget) {
+      return;
+    }
+
+    const listTypeValidationError = getTaskListTypeValidationError(editTaskText);
+    if (listTypeValidationError) {
+      setErrorMessage(listTypeValidationError);
       return;
     }
 

@@ -20,6 +20,18 @@ export interface MainProjectsPageCoreState {
   setHasLoadedOnce: Setter<boolean>;
   errorMessage: string | null;
   setErrorMessage: Setter<string | null>;
+  skillSetReAddTarget: {
+    instructionSetId: string;
+    projectId: string;
+    subprojectId: string | null;
+  } | null;
+  setSkillSetReAddTarget: Setter<{
+    instructionSetId: string;
+    projectId: string;
+    subprojectId: string | null;
+  } | null>;
+  skillSetReAddSubmitting: boolean;
+  setSkillSetReAddSubmitting: Setter<boolean>;
   selectedInstructionSetByComposer: Record<string, string>;
   setSelectedInstructionSetByComposer: Setter<Record<string, string>>;
   quickAddClearSignalByScope: Record<string, number>;
@@ -119,6 +131,12 @@ export const useMainProjectsPageCoreState = (): MainProjectsPageCoreState => {
   const [instructionSets, setInstructionSets] = useState<SkillSetTreeItem[]>([]);
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [skillSetReAddTarget, setSkillSetReAddTarget] = useState<{
+    instructionSetId: string;
+    projectId: string;
+    subprojectId: string | null;
+  } | null>(null);
+  const [skillSetReAddSubmitting, setSkillSetReAddSubmitting] = useState(false);
   const [selectedInstructionSetByComposer, setSelectedInstructionSetByComposer] = useState<
     Record<string, string>
   >({});
@@ -225,6 +243,10 @@ export const useMainProjectsPageCoreState = (): MainProjectsPageCoreState => {
     setHasLoadedOnce,
     errorMessage,
     setErrorMessage,
+    skillSetReAddTarget,
+    setSkillSetReAddTarget,
+    skillSetReAddSubmitting,
+    setSkillSetReAddSubmitting,
     selectedInstructionSetByComposer,
     setSelectedInstructionSetByComposer,
     quickAddClearSignalByScope,

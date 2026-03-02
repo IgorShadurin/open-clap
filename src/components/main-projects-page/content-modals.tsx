@@ -1,6 +1,6 @@
 "use client";
 
-import { ListTodo, Square, Save, Trash2 } from "lucide-react";
+import { ListTodo, RefreshCcw, Save, Square, Trash2 } from "lucide-react";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import {
@@ -274,16 +274,41 @@ export const MainProjectsPageModals = ({ controller }: MainProjectsPageModalsPro
         </DialogContent>
       </Dialog>
 
-      <Dialog onOpenChange={(open) => !open && c.setErrorMessage(null)} open={Boolean(c.errorMessage)}>
+      <Dialog
+        onOpenChange={(open) => {
+          if (!open) {
+            c.setErrorMessage(null);
+            c.setSkillSetReAddTarget(null);
+          }
+        }}
+        open={Boolean(c.errorMessage)}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Request Error</DialogTitle>
             <DialogDescription>{c.errorMessage ?? "An unexpected error occurred."}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button onClick={() => c.setErrorMessage(null)} type="button" variant="outline">
+            <Button
+              onClick={() => {
+                c.setErrorMessage(null);
+                c.setSkillSetReAddTarget(null);
+              }}
+              type="button"
+              variant="outline"
+            >
               Close
             </Button>
+            {c.skillSetReAddTarget ? (
+              <Button
+                disabled={c.skillSetReAddSubmitting}
+                onClick={() => void c.handleConfirmSkillSetReAdd()}
+                type="button"
+              >
+                <RefreshCcw className="h-4 w-4" />
+                Re-add skill set
+              </Button>
+            ) : null}
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -6,10 +6,10 @@ import {
   DEFAULT_TASK_MODEL,
   DEFAULT_TASK_REASONING,
 } from "@/lib/task-reasoning";
+import { getTaskListTypeValidationError } from "@/lib/list-tokens";
 import { canEditTask, requestJson } from "../app-dashboard/helpers";
 import {
   buildMetadataForResolvedSkillTask,
-  parseSkillTaskMetadata,
   resolveSkillSetTasks,
 } from "@/lib/skill-set-links";
 import {
@@ -20,6 +20,14 @@ import type { MainProjectsPageCoreState } from "./content-core-state";
 import type { ProjectTree } from "./content-helpers";
 import { moveItemInList } from "../../lib/drag-drop";
 import type { TaskQuickAddPayload } from "../task-quick-add";
+import { createHandleConfirmSkillSetReAdd } from "./content-actions-skill-readd";
+import {
+  getTaskSourceLabel,
+  getTaskSourceLabelFromMetadata,
+  isInstructionSetAddedToProject,
+  isInstructionSetAlreadyAddedErrorMessage,
+  SKILL_SET_ALREADY_ADDED_MESSAGE,
+} from "./task-skill-set";
 
 interface TaskActionsProps {
   state: MainProjectsPageCoreState;
@@ -42,6 +50,7 @@ export interface MainProjectsPageTaskActions {
   handleConfirmSubprojectDelete: () => Promise<void>;
   handleConfirmTaskDelete: () => Promise<void>;
   handleConfirmTaskStop: () => Promise<void>;
+  handleConfirmSkillSetReAdd: () => Promise<void>;
   handleProjectTaskDrop: (projectId: string, targetTaskId: string) => Promise<void>;
   getSubprojectTasksKey: (projectId: string, subprojectId: string) => string;
   toggleSubprojectTasks: (projectId: string, subprojectId: string) => void;
@@ -52,17 +61,10 @@ export const useMainProjectsPageTaskActions = ({
   state,
   loadProjects,
 }: TaskActionsProps): MainProjectsPageTaskActions => {
-  const getTaskSourceLabel = (task: ProjectTree["tasks"][number]): string | undefined => {
-    const sourceMetadata = parseSkillTaskMetadata(task.metadata);
-    return sourceMetadata?.instructionSetName;
-  };
-
-  const getTaskSourceLabelFromMetadata = (
-    metadata: string | null | undefined,
-  ): string | undefined => {
-    const sourceMetadata = parseSkillTaskMetadata(metadata);
-    return sourceMetadata?.instructionSetName;
-  };
+  const handleConfirmSkillSetReAdd = createHandleConfirmSkillSetReAdd({
+    loadProjects,
+    state,
+  });
 
   const handleProjectTaskPauseToggle = async (task: ProjectTree["tasks"][number]) => {
     if (!canEditTask(task)) {
@@ -128,6 +130,13 @@ export const useMainProjectsPageTaskActions = ({
       return;
     }
 
+    const normalizedTaskText = state.taskDetailsText.trim();
+    const listTypeValidationError = getTaskListTypeValidationError(normalizedTaskText);
+    if (listTypeValidationError) {
+      state.setErrorMessage(listTypeValidationError);
+      return;
+    }
+
     state.setTaskDetailsSubmitting(true);
     try {
       await requestJson(`/api/tasks/${state.taskDetailsTarget.task.id}`, {
@@ -138,7 +147,7 @@ export const useMainProjectsPageTaskActions = ({
             ? state.taskDetailsContextCount
             : 0,
           reasoning: state.taskDetailsReasoning.trim() || DEFAULT_TASK_REASONING,
-          text: state.taskDetailsText.trim(),
+          text: normalizedTaskText,
         }),
         headers: { "Content-Type": "application/json" },
         method: "PATCH",
@@ -151,21 +160,6 @@ export const useMainProjectsPageTaskActions = ({
     } finally {
       state.setTaskDetailsSubmitting(false);
     }
-  };
-
-  const isInstructionSetAddedToProject = (project: ProjectTree, instructionSetId: string): boolean => {
-    const normalizedInstructionSetId = instructionSetId.trim();
-    if (!normalizedInstructionSetId) {
-      return false;
-    }
-
-    const allTasks = project.tasks.concat(
-      project.subprojects.flatMap((subproject) => subproject.tasks),
-    );
-    return allTasks.some((task) => {
-      const metadata = parseSkillTaskMetadata(task.metadata);
-      return metadata?.instructionSetId === normalizedInstructionSetId;
-    });
   };
 
   const handleQuickTaskCreate = async (
@@ -186,12 +180,18 @@ export const useMainProjectsPageTaskActions = ({
     if (trimmedSourceInstructionSetId.length > 0) {
       const resolvedTasks = resolveSkillSetTasks(state.instructionSets, trimmedSourceInstructionSetId);
       if (resolvedTasks.length < 1) {
+        state.setSkillSetReAddTarget(null);
         state.setErrorMessage("Selected skill set has no tasks to add.");
         return;
       }
 
       if (isInstructionSetAddedToProject(project, trimmedSourceInstructionSetId)) {
-        state.setErrorMessage("Skill set already added to this project");
+        state.setSkillSetReAddTarget({
+          instructionSetId: trimmedSourceInstructionSetId,
+          projectId: project.id,
+          subprojectId,
+        });
+        state.setErrorMessage(SKILL_SET_ALREADY_ADDED_MESSAGE);
         return;
       }
 
@@ -225,10 +225,22 @@ export const useMainProjectsPageTaskActions = ({
           isFirstResolvedTask = false;
         }
 
+        state.setSkillSetReAddTarget(null);
         await loadProjects();
         toast.success("Skill set tasks added");
       } catch (error) {
-        state.setErrorMessage(error instanceof Error ? error.message : "Failed to add skill set tasks");
+        const message = error instanceof Error ? error.message : "Failed to add skill set tasks";
+        if (isInstructionSetAlreadyAddedErrorMessage(message)) {
+          state.setSkillSetReAddTarget({
+            instructionSetId: trimmedSourceInstructionSetId,
+            projectId: project.id,
+            subprojectId,
+          });
+          state.setErrorMessage(SKILL_SET_ALREADY_ADDED_MESSAGE);
+        } else {
+          state.setSkillSetReAddTarget(null);
+          state.setErrorMessage(message);
+        }
       }
 
       return;
@@ -236,7 +248,14 @@ export const useMainProjectsPageTaskActions = ({
 
     const normalizedCustomText = payload.text.trim();
     if (normalizedCustomText.length < 1) {
+      state.setSkillSetReAddTarget(null);
       state.setErrorMessage("Task text is required");
+      return;
+    }
+    const listTypeValidationError = getTaskListTypeValidationError(normalizedCustomText);
+    if (listTypeValidationError) {
+      state.setSkillSetReAddTarget(null);
+      state.setErrorMessage(listTypeValidationError);
       return;
     }
 
@@ -255,9 +274,11 @@ export const useMainProjectsPageTaskActions = ({
         headers: { "Content-Type": "application/json" },
         method: "POST",
       });
+      state.setSkillSetReAddTarget(null);
       await loadProjects();
       toast.success(`Task created (${duplicateCount}x)`);
     } catch (error) {
+      state.setSkillSetReAddTarget(null);
       state.setErrorMessage(error instanceof Error ? error.message : "Failed to create task");
     }
   };
@@ -380,6 +401,7 @@ export const useMainProjectsPageTaskActions = ({
     handleConfirmSubprojectDelete,
     handleConfirmTaskDelete,
     handleConfirmTaskStop,
+    handleConfirmSkillSetReAdd,
     handleProjectTaskDrop,
     getSubprojectTasksKey,
     toggleSubprojectTasks,

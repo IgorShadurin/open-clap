@@ -10,15 +10,15 @@ import {
   Pencil,
   Plus,
   Save,
-  Settings,
   Trash2,
   Upload,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import type {
+  ReusableListEntity,
   SkillSetEntity,
   SkillSetTreeItem,
   SkillTaskEntity,
@@ -34,8 +34,16 @@ import {
   DEFAULT_TASK_MODEL,
   DEFAULT_TASK_REASONING,
 } from "@/lib/task-reasoning";
+import { getTaskListTypeValidationError } from "@/lib/list-tokens";
+import {
+  filterListIdsForQuery,
+  findListTokenQueryAtCursor,
+  replaceRangeWithListToken,
+  type ListTokenQueryMatch,
+} from "@/lib/list-token-autocomplete";
 import { requestJson } from "../app-dashboard/helpers";
 import { OpenClapHeader } from "../task-controls/openclap-header";
+import { HeaderNavLinks } from "../task-controls/header-nav-links";
 import { buildProjectAvatar } from "../task-controls/project-avatar";
 import { TaskDeleteConfirmationDialog } from "../task-controls/task-delete-confirmation-dialog";
 import { TaskInlineRow } from "../task-controls/task-inline-row";
@@ -58,6 +66,7 @@ import { TaskModelSelect, TaskReasoningSelect } from "../task-controls/task-sele
 
 export function SkillsPage() {
   const [sets, setSets] = useState<SkillSetTreeItem[]>([]);
+  const [listIds, setListIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -76,6 +85,8 @@ export function SkillsPage() {
   const [editTaskIncludeContext, setEditTaskIncludeContext] = useState(false);
   const [editTaskContextCount, setEditTaskContextCount] = useState(0);
   const [editTaskSubmitting, setEditTaskSubmitting] = useState(false);
+  const [editTaskListQuery, setEditTaskListQuery] = useState<ListTokenQueryMatch | null>(null);
+  const [editTaskListSuggestionIndex, setEditTaskListSuggestionIndex] = useState(0);
   const [deleteTaskTarget, setDeleteTaskTarget] = useState<{
     id: string;
     text: string;
@@ -92,6 +103,15 @@ export function SkillsPage() {
   } | null>(null);
   const createImageInputRef = useRef<HTMLInputElement | null>(null);
   const setImageInputRef = useRef<HTMLInputElement | null>(null);
+  const editTaskTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editTaskHighlightRef = useRef<HTMLDivElement | null>(null);
+
+  const editTaskListSuggestions = useMemo(() => {
+    if (!editTaskListQuery) {
+      return [];
+    }
+    return filterListIdsForQuery(listIds, editTaskListQuery.query);
+  }, [editTaskListQuery, listIds]);
 
   const loadSets = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
@@ -99,10 +119,16 @@ export function SkillsPage() {
     }
 
     try {
-      const result = await requestJson<SkillSetTreeItem[]>("/api/skills", {
-        cache: "no-store",
-      });
-      setSets(result);
+      const [setsResult, listsResult] = await Promise.all([
+        requestJson<SkillSetTreeItem[]>("/api/skills", {
+          cache: "no-store",
+        }),
+        requestJson<ReusableListEntity[]>("/api/lists", {
+          cache: "no-store",
+        }),
+      ]);
+      setSets(setsResult);
+      setListIds(listsResult.map((list) => list.id));
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to load skill sets");
     } finally {
@@ -199,6 +225,13 @@ export function SkillsPage() {
     instructionSetId: string,
     payload: TaskQuickAddPayload,
   ) => {
+    const taskText = payload.text.trim();
+    const listTypeValidationError = getTaskListTypeValidationError(taskText);
+    if (listTypeValidationError) {
+      setErrorMessage(listTypeValidationError);
+      return;
+    }
+
     try {
       const duplicateCount = Number.isFinite(payload.duplicateCount)
         ? Math.max(1, Math.floor(payload.duplicateCount))
@@ -211,7 +244,7 @@ export function SkillsPage() {
           model: payload.model,
           previousContextMessages: payload.includeContext ? payload.contextCount : 0,
           reasoning: payload.reasoning,
-          text: payload.text,
+          text: taskText,
         }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
@@ -388,10 +421,49 @@ export function SkillsPage() {
     setEditTaskReasoning(task.reasoning);
     setEditTaskIncludeContext(task.includePreviousContext);
     setEditTaskContextCount(task.previousContextMessages);
+    setEditTaskListQuery(null);
+    setEditTaskListSuggestionIndex(0);
+  };
+
+  const refreshEditTaskListQuery = (value: string, cursor: number | null) => {
+    if (cursor === null || listIds.length < 1) {
+      setEditTaskListQuery(null);
+      setEditTaskListSuggestionIndex(0);
+      return;
+    }
+
+    const query = findListTokenQueryAtCursor(value, cursor);
+    setEditTaskListQuery(query);
+    setEditTaskListSuggestionIndex(0);
+  };
+
+  const applyEditTaskListSuggestion = (listId: string) => {
+    if (!editTaskListQuery) {
+      return;
+    }
+    const replaced = replaceRangeWithListToken(editTaskText, editTaskListQuery, listId);
+    const nextCursor = editTaskListQuery.start + `$list-${listId}`.length;
+    setEditTaskText(replaced);
+    setEditTaskListQuery(null);
+    setEditTaskListSuggestionIndex(0);
+    window.requestAnimationFrame(() => {
+      if (!editTaskTextAreaRef.current) {
+        return;
+      }
+      editTaskTextAreaRef.current.focus();
+      editTaskTextAreaRef.current.setSelectionRange(nextCursor, nextCursor);
+    });
   };
 
   const saveTaskEdit = async () => {
-    if (!editTaskTarget || editTaskText.trim().length < 1) {
+    const taskText = editTaskText.trim();
+    if (!editTaskTarget || taskText.length < 1) {
+      return;
+    }
+
+    const listTypeValidationError = getTaskListTypeValidationError(taskText);
+    if (listTypeValidationError) {
+      setErrorMessage(listTypeValidationError);
       return;
     }
 
@@ -403,7 +475,7 @@ export function SkillsPage() {
           model: editTaskModel.trim() || DEFAULT_TASK_MODEL,
           previousContextMessages: editTaskIncludeContext ? Math.max(0, editTaskContextCount) : 0,
           reasoning: editTaskReasoning.trim() || DEFAULT_TASK_REASONING,
-          text: editTaskText.trim(),
+          text: taskText,
         }),
         headers: { "Content-Type": "application/json" },
         method: "PATCH",
@@ -456,18 +528,58 @@ export function SkillsPage() {
     return `${normalized.slice(0, maxLength).trimEnd()}...`;
   };
 
+  const renderHighlightedTaskText = (value: string): ReactNode => {
+    const tokenPattern = /\$list-[a-z0-9]+(?:-[a-z0-9]+)*/g;
+    const nodes: ReactNode[] = [];
+    let offset = 0;
+
+    for (const match of value.matchAll(tokenPattern)) {
+      const start = match.index ?? -1;
+      if (start < 0) {
+        continue;
+      }
+
+      if (start > offset) {
+        nodes.push(
+          <span className="text-transparent" key={`text-${offset}`}>
+            {value.slice(offset, start)}
+          </span>,
+        );
+      }
+
+      const tokenText = match[0];
+      nodes.push(
+        <mark
+          className="rounded bg-amber-200/80 text-transparent"
+          key={`token-${start}`}
+        >
+          {tokenText}
+        </mark>,
+      );
+
+      offset = start + tokenText.length;
+    }
+
+    if (offset < value.length) {
+      nodes.push(
+        <span className="text-transparent" key={`text-${offset}`}>
+          {value.slice(offset)}
+        </span>,
+      );
+    }
+
+    if (nodes.length < 1) {
+      return null;
+    }
+
+    return nodes;
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-zinc-100 p-4 md:p-8">
       <div className="mx-auto w-full max-w-6xl space-y-6">
         <OpenClapHeader
-          rightSlot={
-            <Button asChild type="button" variant="outline">
-              <Link href="/settings">
-                <Settings className="h-4 w-4" />
-                <span className="sr-only">Settings</span>
-              </Link>
-            </Button>
-          }
+          rightSlot={<HeaderNavLinks />}
         />
 
         <div className="flex items-center justify-between gap-3">
@@ -733,6 +845,7 @@ export function SkillsPage() {
                       {setTasksVisible ? (
                         <>
                           <TaskQuickAdd
+                            listIds={listIds}
                             onSubmit={(payload) => handleCreateInstructionTask(set.id, payload)}
                             placeholder={`Add task to ${set.name}`}
                             projectId={`skill-set:${set.id}`}
@@ -833,11 +946,103 @@ export function SkillsPage() {
               <DialogDescription>Update task details.</DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
-              <Textarea
-                className="min-h-[150px]"
-                onChange={(event) => setEditTaskText(event.target.value)}
-                value={editTaskText}
-              />
+              <div className="relative">
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 z-0 overflow-auto whitespace-pre-wrap break-words rounded-md border border-transparent px-3 py-2 text-base leading-6"
+                  ref={editTaskHighlightRef}
+                >
+                  {renderHighlightedTaskText(editTaskText)}
+                  {editTaskText.endsWith("\n") ? "\n" : null}
+                </div>
+                <Textarea
+                  className="relative z-10 min-h-[150px] bg-transparent text-base leading-6 text-zinc-900 caret-black"
+                  onChange={(event) => {
+                    setEditTaskText(event.target.value);
+                    refreshEditTaskListQuery(event.target.value, event.target.selectionStart);
+                  }}
+                  onClick={(event) =>
+                    refreshEditTaskListQuery(event.currentTarget.value, event.currentTarget.selectionStart)
+                  }
+                  onKeyDown={(event) => {
+                    if (!editTaskListQuery || editTaskListSuggestions.length < 1) {
+                      return;
+                    }
+
+                    if (event.key === "ArrowDown") {
+                      event.preventDefault();
+                      setEditTaskListSuggestionIndex((current) =>
+                        Math.min(editTaskListSuggestions.length - 1, current + 1),
+                      );
+                      return;
+                    }
+
+                    if (event.key === "ArrowUp") {
+                      event.preventDefault();
+                      setEditTaskListSuggestionIndex((current) => Math.max(0, current - 1));
+                      return;
+                    }
+
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      setEditTaskListQuery(null);
+                      return;
+                    }
+
+                    if (event.key === "Enter" || event.key === "Tab") {
+                      event.preventDefault();
+                      const nextListId =
+                        editTaskListSuggestions[editTaskListSuggestionIndex] ?? editTaskListSuggestions[0];
+                      if (nextListId) {
+                        applyEditTaskListSuggestion(nextListId);
+                      }
+                    }
+                  }}
+                  onKeyUp={(event) =>
+                    refreshEditTaskListQuery(event.currentTarget.value, event.currentTarget.selectionStart)
+                  }
+                  onScroll={(event) => {
+                    if (!editTaskHighlightRef.current) {
+                      return;
+                    }
+                    editTaskHighlightRef.current.scrollTop = event.currentTarget.scrollTop;
+                    editTaskHighlightRef.current.scrollLeft = event.currentTarget.scrollLeft;
+                  }}
+                  onSelect={(event) =>
+                    refreshEditTaskListQuery(event.currentTarget.value, event.currentTarget.selectionStart)
+                  }
+                  ref={editTaskTextAreaRef}
+                  value={editTaskText}
+                />
+              </div>
+              {editTaskListQuery && editTaskListSuggestions.length > 0 ? (
+                <div className="rounded-md border border-zinc-200 bg-zinc-50/80 p-1">
+                  <div className="px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                    Insert list token
+                  </div>
+                  <div className="max-h-32 overflow-y-auto">
+                    {editTaskListSuggestions.map((listId, index) => {
+                      const selected = index === editTaskListSuggestionIndex;
+                      return (
+                        <button
+                          className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm ${
+                            selected ? "bg-zinc-200/80 text-zinc-900" : "text-zinc-700 hover:bg-zinc-100"
+                          }`}
+                          key={listId}
+                          onClick={() => applyEditTaskListSuggestion(listId)}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                          }}
+                          type="button"
+                        >
+                          <span>{listId}</span>
+                          <code className="text-[11px] text-zinc-500">$list-{listId}</code>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
               <div className="grid gap-3 md:grid-cols-2">
                 <TaskModelSelect onValueChange={setEditTaskModel} value={editTaskModel} />
                 <TaskReasoningSelect onValueChange={setEditTaskReasoning} value={editTaskReasoning} />

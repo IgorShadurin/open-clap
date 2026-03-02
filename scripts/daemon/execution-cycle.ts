@@ -6,10 +6,20 @@ import { StatusReporter } from "./status-reporter";
 import type { WorkerTemplates } from "./template-renderer";
 import type { TaskAuditLogger } from "./task-audit-log";
 import type { WaitFunction } from "./retry";
+import type { WorkerExecutionContext } from "./worker-types";
+import {
+  formatElapsedDuration,
+  formatTimeoutDuration,
+  resolveTaskExecutionTimeoutMs,
+} from "./task-timeout-config";
 import { DAEMON_RETRY_POLICY, retryAsync } from "./retry";
 import type { DaemonTask, TaskExecutionResult } from "../../shared/contracts/task";
 import { executeTask } from "./worker";
 import { getExecutionScopeKey } from "../../shared/logic/task-priority";
+import {
+  extractListIdsFromText,
+  getTaskListTypeValidationError,
+} from "../../src/lib/list-tokens";
 
 interface LoggerLike {
   log: (status: LogStatus, message: string) => void;
@@ -126,14 +136,11 @@ export interface RunTaskExecutionCycleOptions {
   templates: WorkerTemplates;
   codexCommandTemplate?: string;
   fiveHourUsageRetry?: FiveHourUsageRetryOptions;
+  resolveTaskTimeoutMs?: (task: DaemonTask) => number;
   workerExecutor?: (
     task: DaemonTask,
     templates: WorkerTemplates,
-    context?: {
-      auditLogger?: TaskAuditLogger;
-      codexCommandTemplate?: string;
-      signal?: AbortSignal;
-    },
+    context?: WorkerExecutionContext,
   ) => Promise<TaskExecutionResult>;
 }
 
@@ -155,6 +162,7 @@ export async function runTaskExecutionCycle({
   templates,
   codexCommandTemplate,
   fiveHourUsageRetry,
+  resolveTaskTimeoutMs = resolveTaskExecutionTimeoutMs,
   workerExecutor = executeTask,
 }: RunTaskExecutionCycleOptions): Promise<ExecutionCycleResult> {
   const slotsRequested = scheduler.availableSlots();
@@ -192,9 +200,40 @@ export async function runTaskExecutionCycle({
 
   await apiClient.markTasksInProgress(claimedTasks.map((task) => task.id));
 
+  let startedCount = 0;
   for (const task of claimedTasks) {
+    const referencedListIds = extractListIdsFromText(task.text);
+    if (referencedListIds.length > 1) {
+      const details =
+        getTaskListTypeValidationError(task.text) ??
+        "Task can reference only one list type.";
+      taskAuditLogger?.log("failure", "Task rejected: multiple list types", {
+        listIds: referencedListIds,
+        taskId: task.id,
+      });
+      await statusReporter.report(task.id, "failed", details);
+      scheduler.finishTask(task.id);
+      logger.log("failed", `Task ${task.id} failed: ${details}`);
+      continue;
+    }
+
+    if (referencedListIds.length === 1) {
+      const listId = referencedListIds[0]!;
+      const plannedPromptCount = task.listExecution?.listId === listId
+        ? task.listExecution.items.length
+        : 0;
+      logger.log(
+        "running",
+        `Task ${task.id} uses $list-${listId}; prompts=${plannedPromptCount}`,
+      );
+    }
+
     const scopeKey = getExecutionScopeKey(task);
     const abortController = new AbortController();
+    const rawTaskTimeoutMs = resolveTaskTimeoutMs(task);
+    const taskTimeoutMs = Number.isFinite(rawTaskTimeoutMs) && rawTaskTimeoutMs > 0
+      ? Math.floor(rawTaskTimeoutMs)
+      : resolveTaskExecutionTimeoutMs(task);
 
     const control: TaskControl = {
       stopped: false,
@@ -230,7 +269,49 @@ export async function runTaskExecutionCycle({
         const result = await workerExecutor(task, templates, {
           auditLogger: taskAuditLogger,
           codexCommandTemplate,
+          onListSubtaskComplete: (event) => {
+            const duration = formatElapsedDuration(event.durationMs);
+            const progressDetails =
+              `Task ${task.id} list progress: ${event.current} of ${event.total} done in ` +
+              `${duration} (status=${event.status}, attempts=${event.attempts})`;
+            if (event.status === "failed") {
+              logger.log("failed", `🚀 ${progressDetails}`);
+            } else {
+              logger.log("running", progressDetails);
+            }
+            taskAuditLogger?.log(
+              event.status === "done" ? "success" : "failure",
+              "List subtask finished",
+              {
+                attempts: event.attempts,
+                current: event.current,
+                duration,
+                durationMs: event.durationMs,
+                itemValue: event.itemValue,
+                listId: event.listId,
+                status: event.status,
+                taskId: event.taskId,
+                total: event.total,
+              },
+            );
+          },
+          onCommandTimeout: (event) => {
+            const timeoutLabel = formatTimeoutDuration(event.timeoutMs);
+            logger.log(
+              "failed",
+              `Task ${task.id} timed out after ${timeoutLabel}; aborting Codex process`,
+            );
+            taskAuditLogger?.log("failure", "Task execution timed out; abort requested", {
+              attempt: event.attempt,
+              model: task.model,
+              reasoning: task.reasoning,
+              taskId: task.id,
+              timeoutMs: event.timeoutMs,
+              variantLabel: event.variantLabel,
+            });
+          },
           signal: abortController.signal,
+          taskTimeoutMs,
         });
 
         if (control.stopped) {
@@ -256,15 +337,16 @@ export async function runTaskExecutionCycle({
     })();
 
     activeWorkers.set(task.id, workerPromise);
+    startedCount += 1;
   }
 
   logger.log(
     "running",
-    `Started ${claimedTasks.length} task(s) out of ${fetchedTasks.length} fetched`,
+    `Started ${startedCount} task(s) out of ${fetchedTasks.length} fetched`,
   );
   return {
     fetched: fetchedTasks.length,
     slotsRequested,
-    started: claimedTasks.length,
+    started: startedCount,
   };
 }

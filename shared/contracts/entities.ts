@@ -43,6 +43,15 @@ export interface SkillTaskEntity {
   updatedAt: string;
 }
 
+export interface SkillSetProjectReAddResult {
+  createdTaskCount: number;
+  instructionSetId: string;
+  instructionSetName: string;
+  projectId: string;
+  removedTaskCount: number;
+  subprojectId: string | null;
+}
+
 export type InstructionSetEntity = SkillSetEntity;
 export type InstructionTaskEntity = SkillTaskEntity;
 

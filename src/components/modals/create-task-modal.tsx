@@ -7,6 +7,7 @@ import {
   DEFAULT_TASK_MODEL,
   DEFAULT_TASK_REASONING,
 } from "@/lib/task-reasoning";
+import { getTaskListTypeValidationError } from "@/lib/list-tokens";
 import { cn } from "@/lib/utils";
 
 import { requestJson } from "../app-dashboard/helpers";
@@ -68,6 +69,12 @@ export function CreateTaskModal({
   }, [open]);
 
   const handleCreateTask = async () => {
+    const listTypeValidationError = getTaskListTypeValidationError(taskText);
+    if (listTypeValidationError) {
+      onError(listTypeValidationError);
+      return;
+    }
+
     setSubmitting(true);
     try {
       await requestJson("/api/tasks", {

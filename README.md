@@ -1,6 +1,6 @@
 # 👏 OpenClap
 
-OpenClap is a local-first orchestration system for managing large volumes of AI-executable work across projects and subprojects. It is designed for high-capacity task pipelines where many actions do not require constant human attention.
+OpenClap is **AI agent orchestration on steroids**: a local-first system built to drive large volumes of AI-executable work across projects and subprojects with high-throughput, low-touch execution control.
 
 ## Why This Project Exists
 
@@ -8,20 +8,22 @@ OpenClap is primarily for unattended execution windows (for example nights, week
 
 This project focuses on orchestration:
 
-- Prioritizing and controlling task execution across projects
-- Structuring work into independent subprojects
-- Pausing, resuming, stopping, and adjusting work without losing control
-- Running unattended flows with clear status and result visibility
+- Cross-project prioritization and deterministic execution control
+- Independent subproject scoping for cleaner task separation
+- Runtime controls for pause, resume, stop, and safe task updates
+- Reusable list management with `$list-*` placeholders (for example language or country code sets)
+- Daemon-side list fan-out execution: one task template can run once per list item with per-item retry handling and aggregated results
 
 The product goal is to help users with heavy Codex usage (including Pro subscription workflows) keep task operations organized, traceable, and scalable with OpenClap.
 
 ## What It Solves
 
-- Project-level and subproject-level task orchestration
-- Off-hours AI execution across multiple projects without constant human presence
-- Priority management for what should run first
-- Operational control over long-running or queued task execution
-- Consistent management workflows for task lifecycle actions
+- High-volume orchestration of AI tasks across many projects and subprojects
+- Unattended/off-hours execution without constant manual supervision
+- Queue discipline and priority ordering for what runs first
+- Fine-grained operational control for long-running and queued work
+- Reusable list-driven execution patterns (`$list-*`) so one task definition can scale across many variants
+- Predictable lifecycle and audit-friendly execution outcomes for each run
 
 Feature details will evolve over time, but the core objective remains stable: reliable orchestration for AI-driven task management on a local machine.
 

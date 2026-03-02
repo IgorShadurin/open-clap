@@ -10,7 +10,6 @@ import {
   Pause,
   Pencil,
   Play,
-  Settings,
   Square,
   Trash2,
 } from "lucide-react";
@@ -21,6 +20,7 @@ import {
   DEFAULT_TASK_MODEL,
   DEFAULT_TASK_REASONING,
 } from "@/lib/task-reasoning";
+import { getTaskListTypeValidationError } from "@/lib/list-tokens";
 
 import type { ProjectEntity, SubprojectEntity, TaskEntity } from "../../../shared/contracts";
 import { canEditTask, requestJson } from "../app-dashboard/helpers";
@@ -29,6 +29,7 @@ import {
   type SubprojectQuickAddPayload,
 } from "../quick-add/subproject-quick-add";
 import { TaskQuickAdd, type TaskQuickAddPayload } from "../task-quick-add";
+import { HeaderNavLinks } from "../task-controls/header-nav-links";
 import { usePreventUnhandledFileDrop } from "../task-controls/use-prevent-unhandled-file-drop";
 import { useRealtimeSync } from "../task-controls/use-realtime-sync";
 import { OpenClapLogo } from "../task-controls/openclap-logo";
@@ -256,6 +257,12 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
       return;
     }
 
+    const listTypeValidationError = getTaskListTypeValidationError(editTaskText);
+    if (listTypeValidationError) {
+      setErrorMessage(listTypeValidationError);
+      return;
+    }
+
     setEditTaskSubmitting(true);
     try {
       await requestJson(`/api/tasks/${editTaskTarget.id}`, {
@@ -411,6 +418,13 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
       return;
     }
 
+    const taskText = payload.text.trim();
+    const listTypeValidationError = getTaskListTypeValidationError(taskText);
+    if (listTypeValidationError) {
+      setErrorMessage(listTypeValidationError);
+      return;
+    }
+
     const duplicateCount = Number.isFinite(payload.duplicateCount)
       ? Math.max(1, Math.floor(payload.duplicateCount))
       : 1;
@@ -424,7 +438,7 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
           projectId: selectedProject.id,
           reasoning: payload.reasoning.trim() || DEFAULT_TASK_REASONING,
           subprojectId,
-          text: payload.text.trim(),
+          text: taskText,
         }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
@@ -637,14 +651,7 @@ export function ProjectTasksPage({ projectId }: ProjectTasksPageProps) {
             <OpenClapLogo />
             OpenClap
           </Link>
-          <div className="flex items-center gap-2">
-            <Button asChild type="button" variant="outline">
-              <Link href="/settings">
-                <Settings className="h-4 w-4" />
-                <span className="sr-only">Settings</span>
-              </Link>
-            </Button>
-          </div>
+          <HeaderNavLinks />
         </div>
 
         <div className="space-y-3 rounded-xl border border-black/10 bg-white/70 px-4 py-3">

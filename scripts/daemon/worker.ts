@@ -1,43 +1,40 @@
 import type { DaemonTask, TaskExecutionResult } from "../../shared/contracts/task";
+import {
+  extractListIdsFromText,
+  getTaskListTypeValidationError,
+  replaceListTokensInText,
+} from "../../src/lib/list-tokens";
 import { loadPromptTemplate } from "../../src/lib/prompt-templates";
 import {
   renderTaskPrompt,
   type WorkerTemplates,
 } from "./template-renderer";
-import type { TaskAuditLogger } from "./task-audit-log";
-import { spawn } from "node:child_process";
-
-const PLACEHOLDER_REGEX = /\{\{([a-zA-Z0-9_]+)\}\}/g;
+import {
+  executeCodexCommand,
+  renderCommandTemplate,
+  runCommandInShell,
+} from "./worker-command";
+import { LIST_SUBTASK_RETRY_COUNT } from "./list-execution-config";
+import type { CommandRunner, WorkerExecutionContext } from "./worker-types";
 
 const DEFAULT_CODEX_COMMAND_TEMPLATE = loadPromptTemplate(
   "prompts/codex-command-template.md",
 );
 
-export interface WorkerExecutionContext {
-  auditLogger?: TaskAuditLogger;
-  codexCommandTemplate?: string;
-  commandRunner?: CommandRunner;
-  signal?: AbortSignal;
+interface TaskVariant {
+  itemValue: string | null;
+  label: string;
+  text: string;
 }
 
-interface ShellCommandResult {
-  code: number;
-  signal: NodeJS.Signals | null;
-  stderr: string;
-  stdout: string;
+interface VariantExecutionResult {
+  attempts: number;
+  fullResponse: string;
+  itemValue: string | null;
+  status: "done" | "failed";
 }
 
-export type CommandRunner = (
-  command: string,
-  options?: { signal?: AbortSignal },
-) => Promise<ShellCommandResult>;
-
-function renderCommandTemplate(
-  template: string,
-  values: Record<string, string>,
-): string {
-  return template.replaceAll(PLACEHOLDER_REGEX, (_match, key: string) => values[key] ?? "");
-}
+export const LIST_SUBTASK_MAX_ATTEMPTS = LIST_SUBTASK_RETRY_COUNT + 1;
 
 function toCommand(task: DaemonTask, message: string, template: string): string {
   return renderCommandTemplate(template, {
@@ -50,141 +47,6 @@ function toCommand(task: DaemonTask, message: string, template: string): string 
   });
 }
 
-async function runCommandInShell(
-  command: string,
-  options: { signal?: AbortSignal } = {},
-): Promise<ShellCommandResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, {
-      shell: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-
-    const cleanupAbortListener = (): void => {
-      if (!options.signal) {
-        return;
-      }
-      options.signal.removeEventListener("abort", onAbort);
-    };
-
-    const settle = (fn: () => void): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanupAbortListener();
-      fn();
-    };
-
-    const onAbort = (): void => {
-      if (child.killed) {
-        return;
-      }
-      child.kill("SIGTERM");
-      setTimeout(() => {
-        if (!child.killed) {
-          child.kill("SIGKILL");
-        }
-      }, 1500).unref();
-    };
-
-    if (options.signal) {
-      if (options.signal.aborted) {
-        onAbort();
-      } else {
-        options.signal.addEventListener("abort", onAbort, { once: true });
-      }
-    }
-
-    child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk: string | Buffer) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk: string | Buffer) => {
-      stderr += chunk.toString();
-    });
-
-    child.on("error", (error) => {
-      settle(() => reject(error));
-    });
-
-    child.on("close", (code, signal) => {
-      settle(() =>
-        resolve({
-          code: code ?? -1,
-          signal,
-          stderr: stderr.trim(),
-          stdout: stdout.trim(),
-        }),
-      );
-    });
-  });
-}
-
-function toFullResponse(stdout: string, stderr: string): string {
-  if (stdout && stderr) {
-    return `${stdout}\n\n[stderr]\n${stderr}`;
-  }
-  if (stdout) {
-    return stdout;
-  }
-  if (stderr) {
-    return stderr;
-  }
-
-  return "Command completed with no output.";
-}
-
-function truncateForLog(value: string, limit = 4000): string {
-  if (value.length <= limit) {
-    return value;
-  }
-
-  return `${value.slice(0, limit)}... [truncated ${value.length - limit} chars]`;
-}
-
-function selectSemanticFailureInput(stdout: string, stderr: string): string {
-  const trimmedStdout = stdout.trim();
-  if (trimmedStdout.length > 0) {
-    return trimmedStdout;
-  }
-
-  const trimmedStderr = stderr.trim();
-  if (trimmedStderr.length <= 4000) {
-    return trimmedStderr;
-  }
-
-  // For very large stderr logs, inspect the tail where the final diagnosis usually appears.
-  return trimmedStderr.slice(-4000);
-}
-
-function detectSemanticFailure(stdout: string, stderr: string): string | null {
-  const combined = selectSemanticFailureInput(stdout, stderr).toLowerCase();
-  const patterns = [
-    /write access is blocked/,
-    /read-only sandbox/,
-    /operation not permitted/,
-    /permission denied/,
-    /\btask (?:was|is) not completed\b/,
-    /\b(?:i|we)\s+(?:can(?:not|['’]t)|could(?: not|['’]t)|am unable to|are unable to)\b[\s\S]{0,140}\b(?:complete|finish|proceed|execute|deliver|write|modify|create)\b/,
-    /\b(?:unable|failed)\s+to\s+(?:complete|finish|proceed|execute|deliver|write|modify|create)\b/,
-  ];
-
-  for (const pattern of patterns) {
-    if (pattern.test(combined)) {
-      return `Codex output indicates task was not completed (${pattern.source})`;
-    }
-  }
-
-  return null;
-}
-
 export function buildTaskMessage(
   task: DaemonTask,
   templates: WorkerTemplates,
@@ -192,21 +54,129 @@ export function buildTaskMessage(
   return renderTaskPrompt(task, templates);
 }
 
+function resolveTaskVariants(task: DaemonTask): {
+  isListTask: boolean;
+  listId: string | null;
+  variants: TaskVariant[];
+} {
+  const listExecution = task.listExecution;
+  if (!listExecution?.listId) {
+    return {
+      isListTask: false,
+      listId: null,
+      variants: [
+        {
+          itemValue: null,
+          label: "single",
+          text: task.text,
+        },
+      ],
+    };
+  }
+
+  if (listExecution.items.length < 1) {
+    return {
+      isListTask: true,
+      listId: listExecution.listId,
+      variants: [],
+    };
+  }
+
+  return {
+    isListTask: true,
+    listId: listExecution.listId,
+    variants: listExecution.items.map((itemValue, index) => ({
+      itemValue,
+      label: `${index + 1}/${listExecution.items.length}`,
+      text: replaceListTokensInText(task.text, new Map([[listExecution.listId, [itemValue]]])),
+    })),
+  };
+}
+
+async function executeCommandForTaskVariant(
+  task: DaemonTask,
+  taskText: string,
+  templates: WorkerTemplates,
+  codexCommandTemplate: string,
+  commandRunner: CommandRunner,
+  context: WorkerExecutionContext,
+  variantLabel: string,
+  attempt: number,
+): Promise<{ fullResponse: string; status: "done" | "failed" }> {
+  const message = buildTaskMessage(
+    {
+      ...task,
+      text: taskText,
+    },
+    templates,
+  );
+  const command = toCommand(
+    {
+      ...task,
+      text: taskText,
+    },
+    message,
+    codexCommandTemplate,
+  );
+  return executeCodexCommand({
+    attempt,
+    command,
+    commandRunner,
+    context,
+    taskId: task.id,
+    variantLabel,
+  });
+}
+
+function formatListExecutionResponse(
+  listId: string,
+  rows: VariantExecutionResult[],
+): string {
+  const failedCount = rows.filter((row) => row.status === "failed").length;
+  const header =
+    `[list-execution] $list-${listId} items=${rows.length} ` +
+    `failed=${failedCount} retryCount=${LIST_SUBTASK_RETRY_COUNT}`;
+
+  const body = rows.map((row, index) => {
+    const itemLabel = row.itemValue ?? "";
+    const sectionHeader =
+      `[${index + 1}/${rows.length}] item=${itemLabel} status=${row.status} attempts=${row.attempts}`;
+    return `${sectionHeader}\n${row.fullResponse}`;
+  });
+
+  return [header, ...body].join("\n\n");
+}
+
 export async function executeTask(
   task: DaemonTask,
   templates: WorkerTemplates,
   context: WorkerExecutionContext = {},
 ): Promise<TaskExecutionResult> {
-  const message = buildTaskMessage(task, templates);
   const codexCommandTemplate = context.codexCommandTemplate ?? DEFAULT_CODEX_COMMAND_TEMPLATE;
-  const command = toCommand(task, message, codexCommandTemplate);
   const commandRunner = context.commandRunner ?? runCommandInShell;
-  const startedAt = Date.now();
+  const referencedListIds = extractListIdsFromText(task.text);
+  if (referencedListIds.length > 1) {
+    const details =
+      getTaskListTypeValidationError(task.text) ??
+      "Task can reference only one list type.";
+    context.auditLogger?.log("failure", "Task rejected: multiple list types", {
+      listIds: referencedListIds,
+      taskId: task.id,
+    });
+    return {
+      status: "failed",
+      fullResponse: details,
+      finishedAt: new Date(),
+    };
+  }
+
+  const variantPlan = resolveTaskVariants(task);
 
   context.auditLogger?.log("task", "Task payload", {
     contextPath: task.contextPath,
     id: task.id,
     includeHistory: task.includeHistory,
+    listExecution: task.listExecution ?? null,
     model: task.model,
     priority: task.priority ?? null,
     projectId: task.projectId ?? null,
@@ -214,68 +184,99 @@ export async function executeTask(
     subprojectId: task.subprojectId ?? null,
     text: task.text,
   });
-  context.auditLogger?.log("command", "Executing codex command", {
-    command,
-    taskId: task.id,
-  });
-
-  let result: ShellCommandResult;
-  try {
-    result = await commandRunner(command, { signal: context.signal });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    context.auditLogger?.log("failure", "Codex command execution error", {
-      message,
+  if (variantPlan.isListTask && variantPlan.listId) {
+    context.auditLogger?.log("task", "List execution plan", {
+      listId: variantPlan.listId,
+      promptCount: variantPlan.variants.length,
       taskId: task.id,
     });
+  }
+
+  if (!variantPlan.isListTask) {
+    const variant = variantPlan.variants[0]!;
+    const result = await executeCommandForTaskVariant(
+      task,
+      variant.text,
+      templates,
+      codexCommandTemplate,
+      commandRunner,
+      context,
+      variant.label,
+      1,
+    );
+
     return {
-      status: "failed",
-      fullResponse: `Codex command execution error: ${message}`,
+      status: result.status,
+      fullResponse: result.fullResponse,
       finishedAt: new Date(),
     };
   }
 
-  const durationMs = Date.now() - startedAt;
-  const fullResponse = toFullResponse(result.stdout, result.stderr);
-  const semanticFailure = detectSemanticFailure(result.stdout, result.stderr);
-
-  if (result.code !== 0 || semanticFailure) {
-    const reason =
-      semanticFailure ??
-      `Codex command failed for task ${task.id} (code=${result.code}, signal=${result.signal ?? "none"})`;
-
-    context.auditLogger?.log("failure", "Codex command failed", {
-      code: result.code,
-      durationMs,
-      reason,
-      signal: result.signal,
-      stderr: truncateForLog(result.stderr),
-      stdout: truncateForLog(result.stdout),
-      taskId: task.id,
-    });
+  if (variantPlan.variants.length < 1) {
     return {
-      status: "failed",
-      fullResponse: `${reason}\n\n${fullResponse}`,
+      status: "done",
+      fullResponse: `No list items found for $list-${variantPlan.listId ?? ""}.`,
       finishedAt: new Date(),
     };
   }
 
-  context.auditLogger?.log("output", "Codex command output", {
-    code: result.code,
-    durationMs,
-    responseLength: fullResponse.length,
-    stderr: truncateForLog(result.stderr),
-    stdout: truncateForLog(result.stdout),
-    taskId: task.id,
-  });
-  context.auditLogger?.log("success", "Codex command completed", {
-    durationMs,
-    taskId: task.id,
-  });
+  const rows: VariantExecutionResult[] = [];
+  for (const variant of variantPlan.variants) {
+    const variantStartedAt = Date.now();
+    let attempts = 0;
+    let latest: { fullResponse: string; status: "done" | "failed" } = {
+      status: "failed",
+      fullResponse: "No execution attempts were made.",
+    };
+
+    while (attempts < LIST_SUBTASK_MAX_ATTEMPTS) {
+      attempts += 1;
+      if (context.signal?.aborted) {
+        latest = {
+          status: "failed",
+          fullResponse: "Task execution aborted.",
+        };
+        break;
+      }
+
+      latest = await executeCommandForTaskVariant(
+        task,
+        variant.text,
+        templates,
+        codexCommandTemplate,
+        commandRunner,
+        context,
+        variant.label,
+        attempts,
+      );
+
+      if (latest.status === "done") {
+        break;
+      }
+    }
+
+    rows.push({
+      attempts,
+      fullResponse: latest.fullResponse,
+      itemValue: variant.itemValue,
+      status: latest.status,
+    });
+
+    context.onListSubtaskComplete?.({
+      attempts,
+      current: rows.length,
+      durationMs: Date.now() - variantStartedAt,
+      itemValue: variant.itemValue,
+      listId: variantPlan.listId ?? "",
+      status: latest.status,
+      taskId: task.id,
+      total: variantPlan.variants.length,
+    });
+  }
 
   return {
     status: "done",
-    fullResponse,
+    fullResponse: formatListExecutionResponse(variantPlan.listId ?? "", rows),
     finishedAt: new Date(),
   };
 }

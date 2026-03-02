@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { BookText, Info, Settings } from "lucide-react";
-import { Button } from "../ui/button";
+import { Info } from "lucide-react";
 import { Card, CardContent } from "../ui/card";
 import { MainProjectsPageProjectList } from "./content-project-list";
 import { ProjectQuickAdd } from "../quick-add/project-quick-add";
 import { OpenClapLogo } from "../task-controls/openclap-logo";
+import { HeaderNavLinks } from "../task-controls/header-nav-links";
 import type { MainProjectsPageController } from "./content-controller";
 
 interface MainProjectsPageDashboardProps {
@@ -145,20 +145,7 @@ export const MainProjectsPageDashboard = ({ controller }: MainProjectsPageDashbo
                 {renderUsageLimits("Weekly limit", codexWeeklyLimitUsedPercent, weeklyResetLabel)}
               </div>
             )}
-            <div className="flex items-center gap-2">
-              <Button asChild type="button" variant="outline">
-                <Link href="/skills">
-                  <BookText className="h-4 w-4" />
-                  <span className="sr-only">Skills</span>
-                </Link>
-              </Button>
-              <Button asChild type="button" variant="outline">
-                <Link href="/settings">
-                  <Settings className="h-4 w-4" />
-                  <span className="sr-only">Settings</span>
-                </Link>
-              </Button>
-            </div>
+            <HeaderNavLinks />
           </div>
         </div>
 

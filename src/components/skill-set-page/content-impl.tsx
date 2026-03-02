@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { BookText, Pencil, Save, Settings, Upload, X } from "lucide-react";
+import { BookText, Pencil, Save, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -20,8 +19,10 @@ import {
   DEFAULT_TASK_MODEL,
   DEFAULT_TASK_REASONING,
 } from "@/lib/task-reasoning";
+import { getTaskListTypeValidationError } from "@/lib/list-tokens";
 import { requestJson } from "../app-dashboard/helpers";
 import { OpenClapHeader } from "../task-controls/openclap-header";
+import { HeaderNavLinks } from "../task-controls/header-nav-links";
 import { TaskDeleteConfirmationDialog } from "../task-controls/task-delete-confirmation-dialog";
 import { TaskInlineRow } from "../task-controls/task-inline-row";
 import { TaskQuickAdd, type TaskQuickAddPayload } from "../task-quick-add";
@@ -164,7 +165,14 @@ export function SkillSetPage({ instructionSetId }: SkillSetPageProps) {
   };
 
   const saveTaskEdit = async () => {
-    if (!editTaskTarget || editTaskText.trim().length < 1) {
+    const taskText = editTaskText.trim();
+    if (!editTaskTarget || taskText.length < 1) {
+      return;
+    }
+
+    const listTypeValidationError = getTaskListTypeValidationError(taskText);
+    if (listTypeValidationError) {
+      setErrorMessage(listTypeValidationError);
       return;
     }
 
@@ -176,7 +184,7 @@ export function SkillSetPage({ instructionSetId }: SkillSetPageProps) {
           model: editTaskModel.trim() || DEFAULT_TASK_MODEL,
           previousContextMessages: editTaskIncludeContext ? Math.max(0, editTaskContextCount) : 0,
           reasoning: editTaskReasoning.trim() || DEFAULT_TASK_REASONING,
-          text: editTaskText.trim(),
+          text: taskText,
         }),
         headers: { "Content-Type": "application/json" },
         method: "PATCH",
@@ -192,6 +200,13 @@ export function SkillSetPage({ instructionSetId }: SkillSetPageProps) {
   };
 
   const createTask = async (payload: TaskQuickAddPayload) => {
+    const taskText = payload.text.trim();
+    const listTypeValidationError = getTaskListTypeValidationError(taskText);
+    if (listTypeValidationError) {
+      setErrorMessage(listTypeValidationError);
+      return;
+    }
+
     try {
       const duplicateCount = Number.isFinite(payload.duplicateCount)
         ? Math.max(1, Math.floor(payload.duplicateCount))
@@ -204,7 +219,7 @@ export function SkillSetPage({ instructionSetId }: SkillSetPageProps) {
           model: payload.model,
           previousContextMessages: payload.includeContext ? payload.contextCount : 0,
           reasoning: payload.reasoning,
-          text: payload.text,
+          text: taskText,
         }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
@@ -355,22 +370,7 @@ export function SkillSetPage({ instructionSetId }: SkillSetPageProps) {
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-zinc-100 p-4 md:p-8">
       <div className="mx-auto w-full max-w-6xl space-y-6">
         <OpenClapHeader
-          rightSlot={
-            <>
-              <Button asChild type="button" variant="outline">
-                <Link href="/skills">
-                  <BookText className="h-4 w-4" />
-                  <span className="sr-only">Skills</span>
-                </Link>
-              </Button>
-              <Button asChild type="button" variant="outline">
-                <Link href="/settings">
-                  <Settings className="h-4 w-4" />
-                  <span className="sr-only">Settings</span>
-                </Link>
-              </Button>
-            </>
-          }
+          rightSlot={<HeaderNavLinks />}
         />
 
         {loading ? (

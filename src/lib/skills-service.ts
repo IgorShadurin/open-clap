@@ -15,6 +15,7 @@ import {
 import { publishAppSync } from "./live-sync";
 import { prisma } from "./prisma";
 import { DEFAULT_TASK_MODEL, DEFAULT_TASK_REASONING } from "./task-reasoning";
+import { assertTaskTextListReferencesExist } from "./lists-service";
 
 function toInstructionSetEntity(input: {
   createdAt: Date;
@@ -523,6 +524,7 @@ export async function createInstructionTask(input: {
   if (normalizedText.length < 1) {
     throw new Error("Task text is required");
   }
+  await assertTaskTextListReferencesExist(normalizedText);
 
   const duplicateCount = Number.isFinite(input.duplicateCount)
     ? Math.max(1, Math.floor(input.duplicateCount))
@@ -603,6 +605,9 @@ export async function updateInstructionTask(
   const normalizedText = input.text === undefined ? undefined : input.text.trim();
   if (input.text !== undefined && normalizedText.length < 1) {
     throw new Error("Task text is required");
+  }
+  if (normalizedText !== undefined) {
+    await assertTaskTextListReferencesExist(normalizedText);
   }
 
   const task = await prisma.skillTask.update({

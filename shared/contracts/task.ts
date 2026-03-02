@@ -11,6 +11,10 @@ export interface DaemonTask {
   id: string;
   text: string;
   contextPath: string;
+  listExecution?: {
+    items: string[];
+    listId: string;
+  } | null;
   priority?: number;
   previousContextMessages?: number;
   projectId?: string;

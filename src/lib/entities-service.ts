@@ -11,6 +11,7 @@ import { DEFAULT_TASK_MODEL, DEFAULT_TASK_REASONING } from "./task-reasoning";
 import { normalizeUserPath, validatePathExists } from "./path-validation";
 import { prisma } from "./prisma";
 import { markSkillTaskMetadataEdited, parseSkillTaskMetadata } from "./skill-set-links";
+import { assertTaskTextListReferencesExist } from "./lists-service";
 
 function stringifyMetadata(value: Prisma.JsonValue | null | undefined): string | null {
   if (value === null) {
@@ -626,6 +627,7 @@ export async function createTask(input: {
   if (normalizedText.length < 1) {
     throw new Error("Task text is required");
   }
+  await assertTaskTextListReferencesExist(normalizedText);
   const priority = await nextPriority("task", {
     projectId: input.projectId,
     subprojectId:
@@ -678,6 +680,9 @@ export async function updateTask(
   const normalizedText = input.text === undefined ? undefined : input.text.trim();
   if (input.text !== undefined && normalizedText.length < 1) {
     throw new Error("Task text is required");
+  }
+  if (normalizedText !== undefined) {
+    await assertTaskTextListReferencesExist(normalizedText);
   }
 
   const existing = await prisma.task.findUnique({

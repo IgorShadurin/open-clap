@@ -15,6 +15,8 @@ import { POST as taskActionPost } from "../../src/app/api/tasks/[taskId]/action/
 import { GET as listTaskResponsesGet } from "../../src/app/api/tasks/[taskId]/responses/route";
 
 async function resetDatabase(): Promise<void> {
+  await prisma.reusableListItem.deleteMany();
+  await prisma.reusableList.deleteMany();
   await prisma.setting.deleteMany();
   await prisma.taskStatusUpdate.deleteMany();
   await prisma.taskResponse.deleteMany();
@@ -185,6 +187,51 @@ test("daemon claim history includes only previous task texts, not codex response
   assert.ok(payload.tasks[0].history);
   assert.equal(payload.tasks[0].history.includes("previous task text"), true);
   assert.equal(payload.tasks[0].history.includes("VERY_LONG_CODEX_RESPONSE_SHOULD_NOT_BE_IN_HISTORY"), false);
+});
+
+test("daemon claim includes list execution context for $list-* placeholders", async () => {
+  await resetDatabase();
+
+  await prisma.reusableList.create({
+    data: {
+      id: "country-codes",
+      items: {
+        create: [
+          { priority: 0, value: "ar-SA" },
+          { priority: 1, value: "ca" },
+          { priority: 2, value: "cs" },
+        ],
+      },
+    },
+  });
+
+  const project = await createProject("List Expansion Project");
+  await prisma.task.create({
+    data: {
+      projectId: project.id,
+      text: "Run this for $list-country-codes right now",
+    },
+  });
+
+  const response = await claimTasksPost(
+    new Request("http://localhost/api/daemon/tasks/claim", {
+      body: JSON.stringify({ limit: 1 }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as {
+    tasks: Array<{
+      listExecution?: { items: string[]; listId: string } | null;
+      text: string;
+    }>;
+  };
+  assert.equal(payload.tasks.length, 1);
+  assert.equal(payload.tasks[0].text.includes("$list-country-codes"), true);
+  assert.equal(payload.tasks[0].listExecution?.listId, "country-codes");
+  assert.deepEqual(payload.tasks[0].listExecution?.items, ["ar-SA", "ca", "cs"]);
 });
 
 test("daemon status endpoint is idempotent when idempotency key is reused", async () => {

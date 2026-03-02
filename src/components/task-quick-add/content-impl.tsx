@@ -1,7 +1,7 @@
 "use client";
 
 import { Send } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { DragEvent, KeyboardEvent, ReactNode } from "react";
 
 import {
@@ -20,6 +20,13 @@ import {
   saveTaskFormPreferences,
   TASK_FORM_PREFERENCES_UPDATED_EVENT,
 } from "@/lib/task-form-preferences";
+import {
+  filterListIdsForQuery,
+  findListTokenQueryAtCursor,
+  replaceRangeWithListToken,
+  type ListTokenQueryMatch,
+} from "@/lib/list-token-autocomplete";
+import { getTaskListTypeValidationError } from "@/lib/list-tokens";
 
 import { TaskModelSelect, TaskReasoningSelect } from "../task-controls/task-select-dropdowns";
 import { Button } from "../ui/button";
@@ -41,6 +48,7 @@ interface TaskQuickAddProps {
   onSubmit: (payload: TaskQuickAddPayload) => Promise<void> | void;
   clearInputSignal?: number;
   disableTextInput?: boolean;
+  listIds?: string[];
   placeholder: string;
   projectId: string;
   rightAddon?: ReactNode;
@@ -59,6 +67,7 @@ export function TaskQuickAdd({
   onSubmit,
   clearInputSignal,
   disableTextInput = false,
+  listIds = [],
   placeholder,
   projectId,
   rightAddon,
@@ -76,6 +85,8 @@ export function TaskQuickAdd({
   const [preferencesLoadedProjectId, setPreferencesLoadedProjectId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [dropError, setDropError] = useState<string | null>(null);
+  const [listTokenQuery, setListTokenQuery] = useState<ListTokenQueryMatch | null>(null);
+  const [selectedListSuggestionIndex, setSelectedListSuggestionIndex] = useState(0);
   const formRef = useRef<HTMLFormElement | null>(null);
   const textInputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileDropDepthRef = useRef(0);
@@ -158,8 +169,17 @@ export function TaskQuickAdd({
     setSettingsExpanded(false);
     setFileDropReady(false);
     setDropError(null);
+    setListTokenQuery(null);
+    setSelectedListSuggestionIndex(0);
     fileDropDepthRef.current = 0;
   };
+
+  const listSuggestions = useMemo(() => {
+    if (!listTokenQuery) {
+      return [];
+    }
+    return filterListIdsForQuery(listIds, listTokenQuery.query);
+  }, [listIds, listTokenQuery]);
 
   const stopEventPropagation = <T extends { stopPropagation: () => void }>(event: T) => {
     if (stopPropagation) {
@@ -184,6 +204,18 @@ export function TaskQuickAdd({
     if (active) {
       setSettingsExpanded(true);
     }
+  };
+
+  const refreshListTokenQuery = (value: string, cursor: number | null) => {
+    if (disableTextInput || listIds.length < 1 || cursor === null) {
+      setListTokenQuery(null);
+      setSelectedListSuggestionIndex(0);
+      return;
+    }
+
+    const match = findListTokenQueryAtCursor(value, cursor);
+    setListTokenQuery(match);
+    setSelectedListSuggestionIndex(0);
   };
 
   const stopFileDropEvent = (event: {
@@ -385,7 +417,12 @@ export function TaskQuickAdd({
       return;
     }
 
-    setText((current) => appendDroppedPaths(current, attachmentPaths));
+    setText((current) => {
+      const next = appendDroppedPaths(current, attachmentPaths);
+      const cursor = next.length;
+      refreshListTokenQuery(next, cursor);
+      return next;
+    });
     textInputRef.current?.focus();
   };
 
@@ -413,6 +450,12 @@ export function TaskQuickAdd({
       return;
     }
 
+    const listTypeValidationError = getTaskListTypeValidationError(trimmedText);
+    if (listTypeValidationError) {
+      setDropError(listTypeValidationError);
+      return;
+    }
+
     setSubmitting(true);
     try {
       await onSubmit({
@@ -432,6 +475,48 @@ export function TaskQuickAdd({
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (disableTextInput) {
       return;
+    }
+
+    if (listTokenQuery && listSuggestions.length > 0) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setSelectedListSuggestionIndex((current) =>
+          Math.min(listSuggestions.length - 1, current + 1),
+        );
+        return;
+      }
+
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setSelectedListSuggestionIndex((current) => Math.max(0, current - 1));
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setListTokenQuery(null);
+        return;
+      }
+
+      if (event.key === "Enter" || event.key === "Tab") {
+        event.preventDefault();
+        const nextListId = listSuggestions[selectedListSuggestionIndex] ?? listSuggestions[0];
+        if (nextListId) {
+          const replaced = replaceRangeWithListToken(text, listTokenQuery, nextListId);
+          const nextCursor = listTokenQuery.start + `$list-${nextListId}`.length;
+          setText(replaced);
+          setListTokenQuery(null);
+          setSelectedListSuggestionIndex(0);
+          window.requestAnimationFrame(() => {
+            if (!textInputRef.current) {
+              return;
+            }
+            textInputRef.current.focus();
+            textInputRef.current.setSelectionRange(nextCursor, nextCursor);
+          });
+        }
+        return;
+      }
     }
 
     if (event.key === "Enter") {
@@ -498,13 +583,24 @@ export function TaskQuickAdd({
           disabled={disableTextInput}
           draggable={false}
           data-task-file-drop="true"
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            setText(nextValue);
+            setDropError(null);
+            refreshListTokenQuery(nextValue, event.target.selectionStart);
+          }}
           onDragStart={preventDragStart}
           onFocus={() => setSettingsExpanded(true)}
           onInput={adjustTextAreaHeight}
+          onClick={(event) =>
+            refreshListTokenQuery(event.currentTarget.value, event.currentTarget.selectionStart)
+          }
           onMouseDown={stopEventPropagation}
           onPointerDown={stopEventPropagation}
           onKeyDown={handleKeyDown}
+          onKeyUp={(event) =>
+            refreshListTokenQuery(event.currentTarget.value, event.currentTarget.selectionStart)
+          }
           placeholder={placeholder}
           ref={textInputRef}
           value={text}
@@ -524,6 +620,50 @@ export function TaskQuickAdd({
           <Send className="h-4 w-4" />
         </Button>
       </div>
+      {listTokenQuery && listSuggestions.length > 0 ? (
+        <div className="mt-2 rounded-md border border-zinc-200 bg-zinc-50/80 p-1">
+          <div className="px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+            Insert list token
+          </div>
+          <div className="max-h-32 overflow-y-auto">
+            {listSuggestions.map((listId, index) => {
+              const selected = index === selectedListSuggestionIndex;
+              return (
+                <button
+                  className={`flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-sm ${
+                    selected ? "bg-zinc-200/80 text-zinc-900" : "text-zinc-700 hover:bg-zinc-100"
+                  }`}
+                  key={listId}
+                  onClick={() => {
+                    if (!listTokenQuery) {
+                      return;
+                    }
+                    const replaced = replaceRangeWithListToken(text, listTokenQuery, listId);
+                    const nextCursor = listTokenQuery.start + `$list-${listId}`.length;
+                    setText(replaced);
+                    setListTokenQuery(null);
+                    setSelectedListSuggestionIndex(0);
+                    window.requestAnimationFrame(() => {
+                      if (!textInputRef.current) {
+                        return;
+                      }
+                      textInputRef.current.focus();
+                      textInputRef.current.setSelectionRange(nextCursor, nextCursor);
+                    });
+                  }}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                  }}
+                  type="button"
+                >
+                  <span>{listId}</span>
+                  <code className="text-[11px] text-zinc-500">$list-{listId}</code>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
       {fileDropReady ? (
         <div className="mt-2 rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs text-emerald-800">
           Release to attach screenshot path

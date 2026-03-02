@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import type { CodexUsageApiResponse, SettingRecord } from "../../../shared/contracts";
 import { requestJson } from "../app-dashboard/helpers";
+import { HeaderNavLinks } from "../task-controls/header-nav-links";
 import { OpenClapHeader } from "../task-controls/openclap-header";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
@@ -213,7 +214,7 @@ export function SettingsPage() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-zinc-100 p-4 md:p-8">
       <div className="mx-auto w-full max-w-6xl space-y-6">
-        <OpenClapHeader />
+        <OpenClapHeader rightSlot={<HeaderNavLinks />} />
 
         {!hasLoadedOnce && loading ? (
           <Card className="animate-pulse">
