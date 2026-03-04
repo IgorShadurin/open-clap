@@ -1,129 +1,137 @@
 "use client";
 
-import { FolderSearch, FolderPlus, Loader2, RefreshCcw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { FolderPlus, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 
-import type { PathSortMode, SettingRecord } from "../../../shared/contracts";
+import type { SkillSetTreeItem } from "../../../shared/contracts";
+import type { ValidatePathResponse } from "../../../shared/contracts/path";
 import { requestJson } from "../app-dashboard/helpers";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select } from "../ui/select";
-import { Textarea } from "../ui/textarea";
-
-interface PathDirectory {
-  modifiedAt: string;
-  name: string;
-  path: string;
-}
+import {
+  PATH_VALIDATION_DEBOUNCE_MS,
+  PROJECT_QUICK_ADD_SKILL_STORAGE_KEY,
+  formatProjectNameFromPath,
+  type PathValidationState,
+} from "./project-quick-add-helpers";
 
 export interface ProjectQuickAddPayload {
-  metadata: string;
   name: string;
   path: string;
+  skillSetId?: string;
 }
 
 interface ProjectQuickAddProps {
   onError: (message: string) => void;
   onSubmit: (payload: ProjectQuickAddPayload) => Promise<void> | void;
+  skillSets: SkillSetTreeItem[];
   placeholder?: string;
   submitAriaLabel: string;
   submitTitle: string;
 }
 
-const PATH_MODIFIED_AT_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  month: "2-digit",
-  year: "numeric",
-});
-
-function formatModifiedAt(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return "unknown";
-  }
-
-  return PATH_MODIFIED_AT_FORMATTER.format(parsed);
-}
-
-function formatProjectNameFromDirectory(directoryName: string): string {
-  const normalized = directoryName
-    .replace(/[-_]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!normalized) {
-    return "";
-  }
-
-  const lowered = normalized.toLowerCase();
-  return `${lowered.charAt(0).toUpperCase()}${lowered.slice(1)}`;
-}
-
 export function ProjectQuickAdd({
   onError,
   onSubmit,
-  placeholder = "Create project",
+  skillSets,
+  placeholder = "Project path",
   submitAriaLabel,
   submitTitle,
 }: ProjectQuickAddProps) {
-  const [projectName, setProjectName] = useState("");
   const [projectPath, setProjectPath] = useState("");
-  const [projectMetadata, setProjectMetadata] = useState("");
-  const [pathBase, setPathBase] = useState("");
-  const [pathSort, setPathSort] = useState<PathSortMode>("modified");
-  const [pathDirectories, setPathDirectories] = useState<PathDirectory[]>([]);
+  const [projectName, setProjectName] = useState("");
+  const [nameWasEditedManually, setNameWasEditedManually] = useState(false);
+  const [selectedSkillSetId, setSelectedSkillSetId] = useState("");
+  const [hasLoadedStoredSkillId, setHasLoadedStoredSkillId] = useState(false);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
-  const [defaultsLoaded, setDefaultsLoaded] = useState(false);
-  const [loadingDirectories, setLoadingDirectories] = useState(false);
+  const [pathValidation, setPathValidation] = useState<PathValidationState>({
+    message: "",
+    normalizedPath: "",
+    status: "idle",
+    validatedFrom: "",
+  });
   const [submitting, setSubmitting] = useState(false);
+  const validationRequestIdRef = useRef(0);
   const formRef = useRef<HTMLFormElement | null>(null);
 
-  const loadDirectories = useCallback(
-    async (basePath: string, sort: PathSortMode) => {
-      setLoadingDirectories(true);
-      try {
-        const result = await requestJson<{
-          basePath: string;
-          directories: PathDirectory[];
-          sort: PathSortMode;
-        }>("/api/paths/list", {
-          body: JSON.stringify({ basePath, sort }),
-          headers: { "Content-Type": "application/json" },
-          method: "POST",
-        });
-        setPathBase(result.basePath);
-        setPathSort(result.sort);
-        setPathDirectories(result.directories);
-      } catch (error) {
-        onError(error instanceof Error ? error.message : "Failed to load directories");
-      } finally {
-        setLoadingDirectories(false);
-      }
-    },
-    [onError],
-  );
-
-  const loadDefaults = useCallback(async () => {
-    try {
-      const settings = await requestJson<SettingRecord[]>("/api/settings");
-      const defaultBasePath =
-        settings.find((setting) => setting.key === "default_project_base_path")
-          ?.effectiveValue ?? ".";
-      const defaultSort =
-        settings.find((setting) => setting.key === "project_path_sort_mode")
-          ?.effectiveValue ?? "modified";
-      const normalizedSort = defaultSort === "name" ? "name" : "modified";
-
-      setPathBase(defaultBasePath);
-      setPathSort(normalizedSort);
-      await loadDirectories(defaultBasePath, normalizedSort);
-      setDefaultsLoaded(true);
-    } catch (error) {
-      onError(error instanceof Error ? error.message : "Failed to load settings");
+  const validatePath = useCallback(async (rawPath: string) => {
+    const trimmedPath = rawPath.trim();
+    if (!trimmedPath) {
+      setPathValidation({
+        message: "",
+        normalizedPath: "",
+        status: "idle",
+        validatedFrom: "",
+      });
+      return null;
     }
-  }, [loadDirectories, onError]);
+
+    const requestId = validationRequestIdRef.current + 1;
+    validationRequestIdRef.current = requestId;
+    setPathValidation({
+      message: "Checking path…",
+      normalizedPath: "",
+      status: "validating",
+      validatedFrom: trimmedPath,
+    });
+
+    try {
+      const result = await requestJson<ValidatePathResponse>("/api/paths/validate", {
+        body: JSON.stringify({ path: trimmedPath }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+
+      if (requestId !== validationRequestIdRef.current) {
+        return null;
+      }
+
+      if (!result.exists || !result.isDirectory) {
+        setPathValidation({
+          message: "Path does not exist or is not a directory",
+          normalizedPath: result.normalizedPath,
+          status: "invalid",
+          validatedFrom: trimmedPath,
+        });
+        return null;
+      }
+
+      setPathValidation({
+        message: "Path is valid",
+        normalizedPath: result.normalizedPath,
+        status: "valid",
+        validatedFrom: trimmedPath,
+      });
+      return result;
+    } catch (error) {
+      if (requestId !== validationRequestIdRef.current) {
+        return null;
+      }
+
+      setPathValidation({
+        message: error instanceof Error ? error.message : "Failed to validate path",
+        normalizedPath: "",
+        status: "invalid",
+        validatedFrom: trimmedPath,
+      });
+      return null;
+    }
+  }, []);
+
+  const effectiveName = useMemo(() => {
+    const manualName = projectName.trim();
+    if (manualName.length > 0) {
+      return manualName;
+    }
+
+    if (pathValidation.status === "valid") {
+      return formatProjectNameFromPath(pathValidation.normalizedPath);
+    }
+
+    return formatProjectNameFromPath(projectPath);
+  }, [pathValidation, projectName, projectPath]);
 
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
@@ -145,31 +153,121 @@ export function ProjectQuickAdd({
     };
   }, []);
 
-  const expandDetails = () => {
-    setDetailsExpanded(true);
-    if (!defaultsLoaded) {
-      void loadDefaults();
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
     }
-  };
+
+    try {
+      const storedSkillId = window.localStorage.getItem(PROJECT_QUICK_ADD_SKILL_STORAGE_KEY);
+      setSelectedSkillSetId(storedSkillId?.trim() ?? "");
+    } catch {
+      setSelectedSkillSetId("");
+    } finally {
+      setHasLoadedStoredSkillId(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!hasLoadedStoredSkillId) {
+      return;
+    }
+
+    if (selectedSkillSetId.length < 1) {
+      return;
+    }
+
+    const isKnownSkill = skillSets.some((skillSet) => skillSet.id === selectedSkillSetId);
+    if (!isKnownSkill) {
+      setSelectedSkillSetId("");
+      try {
+        window.localStorage.setItem(PROJECT_QUICK_ADD_SKILL_STORAGE_KEY, "");
+      } catch {
+        // Ignore storage write failures (e.g., disabled storage).
+      }
+    }
+  }, [hasLoadedStoredSkillId, selectedSkillSetId, skillSets]);
+
+  useEffect(() => {
+    const trimmedPath = projectPath.trim();
+    if (!trimmedPath) {
+      setPathValidation({
+        message: "",
+        normalizedPath: "",
+        status: "idle",
+        validatedFrom: "",
+      });
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void validatePath(trimmedPath).then((result) => {
+        if (!result || nameWasEditedManually) {
+          return;
+        }
+
+        const generatedName = formatProjectNameFromPath(result.normalizedPath);
+        if (generatedName.length < 1) {
+          return;
+        }
+
+        setProjectName(generatedName);
+      });
+    }, PATH_VALIDATION_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [nameWasEditedManually, projectPath, validatePath]);
 
   const reset = () => {
     setProjectName("");
     setProjectPath("");
-    setProjectMetadata("");
+    setNameWasEditedManually(false);
     setDetailsExpanded(false);
+    setPathValidation({
+      message: "",
+      normalizedPath: "",
+      status: "idle",
+      validatedFrom: "",
+    });
   };
 
   const handleSubmit = async () => {
-    if (projectName.trim().length < 1 || projectPath.trim().length < 1 || submitting) {
+    if (submitting) {
+      return;
+    }
+
+    const trimmedPath = projectPath.trim();
+    if (!trimmedPath) {
+      onError("Project path is required");
+      return;
+    }
+
+    let normalizedPath = "";
+    if (pathValidation.status === "valid" && pathValidation.validatedFrom === trimmedPath) {
+      normalizedPath = pathValidation.normalizedPath;
+    } else {
+      const validation = await validatePath(trimmedPath);
+      if (!validation || !validation.exists || !validation.isDirectory) {
+        onError("Project path does not exist or is not a directory");
+        return;
+      }
+      normalizedPath = validation.normalizedPath;
+    }
+
+    const normalizedName = effectiveName.trim();
+    if (normalizedName.length < 1) {
+      onError("Project name is required");
       return;
     }
 
     setSubmitting(true);
     try {
       await onSubmit({
-        metadata: projectMetadata.trim(),
-        name: projectName.trim(),
-        path: projectPath.trim(),
+        name: normalizedName,
+        path: normalizedPath,
+        skillSetId: selectedSkillSetId.trim() || undefined,
       });
       reset();
     } finally {
@@ -177,18 +275,21 @@ export function ProjectQuickAdd({
     }
   };
 
-  const handleNameKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key !== "Tab" || event.shiftKey) {
-      return;
-    }
-
-    if (event.currentTarget.value.trim().length < 1) {
+  const handlePathOrNameKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter") {
       return;
     }
 
     event.preventDefault();
     void handleSubmit();
   };
+
+  const validationClassName =
+    pathValidation.status === "valid"
+      ? "text-emerald-700"
+      : pathValidation.status === "invalid"
+        ? "text-red-600"
+        : "text-zinc-500";
 
   return (
     <form
@@ -202,17 +303,23 @@ export function ProjectQuickAdd({
       <div className="flex items-center gap-2">
         <Input
           className="h-9 text-sm"
-          onChange={(event) => setProjectName(event.target.value)}
-          onFocus={expandDetails}
-          onKeyDown={handleNameKeyDown}
+          onChange={(event) => {
+            setProjectPath(event.target.value);
+            setDetailsExpanded(true);
+          }}
+          onFocus={() => setDetailsExpanded(true)}
+          onKeyDown={handlePathOrNameKeyDown}
           placeholder={placeholder}
-          value={projectName}
+          value={projectPath}
         />
         <Button
           aria-label={submitAriaLabel}
           className="h-9 w-9 shrink-0 p-0"
           disabled={
-            submitting || projectName.trim().length < 1 || projectPath.trim().length < 1
+            submitting ||
+            pathValidation.status === "validating" ||
+            projectPath.trim().length < 1 ||
+            effectiveName.length < 1
           }
           title={submitTitle}
           type="submit"
@@ -228,81 +335,48 @@ export function ProjectQuickAdd({
 
       {detailsExpanded ? (
         <div className="absolute left-0 right-0 top-full z-20 mt-2 space-y-2 rounded-md border border-black/15 bg-white p-2 shadow-lg">
-          <div className="flex items-center gap-2">
+          <div className={`text-xs ${validationClassName}`}>
+            {pathValidation.message || "Enter a project path to auto-generate the project name."}
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_15rem]">
             <Input
               className="h-9 text-sm"
-              onChange={(event) => setPathBase(event.target.value)}
-              onFocus={expandDetails}
-              placeholder="Base path for directory selection"
-              value={pathBase}
+              onChange={(event) => {
+                const nextName = event.target.value;
+                setProjectName(nextName);
+                setNameWasEditedManually(nextName.trim().length > 0);
+              }}
+              onFocus={() => setDetailsExpanded(true)}
+              onKeyDown={handlePathOrNameKeyDown}
+              placeholder="Project name"
+              value={projectName}
             />
             <Select
               className="h-9 text-sm"
               onChange={(event) => {
-                const nextSort = event.target.value as PathSortMode;
-                setPathSort(nextSort);
-                void loadDirectories(pathBase, nextSort);
+                const nextSkillSetId = event.target.value;
+                setSelectedSkillSetId(nextSkillSetId);
+                try {
+                  window.localStorage.setItem(
+                    PROJECT_QUICK_ADD_SKILL_STORAGE_KEY,
+                    nextSkillSetId,
+                  );
+                } catch {
+                  // Ignore storage write failures (e.g., disabled storage).
+                }
               }}
-              onFocus={expandDetails}
-              value={pathSort}
+              onFocus={() => setDetailsExpanded(true)}
+              value={selectedSkillSetId}
             >
-              <option value="modified">Sort by modified</option>
-              <option value="name">Sort by name</option>
+              <option value="">No skill auto-add</option>
+              {skillSets.map((skillSet) => (
+                <option key={skillSet.id} value={skillSet.id}>
+                  {skillSet.name}
+                </option>
+              ))}
             </Select>
-            <Button
-              className="h-9 px-3"
-              disabled={loadingDirectories}
-              onClick={() => void loadDirectories(pathBase, pathSort)}
-              type="button"
-              variant="outline"
-            >
-              {loadingDirectories ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCcw className="h-4 w-4" />
-              )}
-            </Button>
           </div>
-
-          <div className="max-h-36 space-y-1 overflow-auto rounded border border-black/10 bg-white p-2 text-xs">
-            {pathDirectories.map((directory) => (
-              <button
-                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-zinc-100"
-                key={directory.path}
-                onClick={() => {
-                  setProjectPath(directory.path);
-                  setProjectName(formatProjectNameFromDirectory(directory.name));
-                }}
-                type="button"
-              >
-                <FolderSearch className="h-3.5 w-3.5" />
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="truncate">{directory.name}</span>
-                  <span className="shrink-0 text-[11px] text-zinc-500">
-                    {formatModifiedAt(directory.modifiedAt)}
-                  </span>
-                </div>
-              </button>
-            ))}
-            {pathDirectories.length < 1 ? (
-              <div className="px-2 py-1 text-zinc-500">No directories loaded.</div>
-            ) : null}
-          </div>
-
-          <Input
-            className="h-9 text-sm"
-            onChange={(event) => setProjectPath(event.target.value)}
-            onFocus={expandDetails}
-            placeholder="Project path"
-            value={projectPath}
-          />
-          <Textarea
-            className="min-h-[84px] text-sm"
-            onChange={(event) => setProjectMetadata(event.target.value)}
-            onFocus={expandDetails}
-            placeholder='Project metadata (optional JSON), e.g. {"team":"automation"}'
-            value={projectMetadata}
-          />
         </div>
       ) : null}
     </form>

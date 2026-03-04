@@ -4,11 +4,13 @@ import { toast } from "sonner";
 import { clearTaskFormPreferences } from "@/lib/task-form-preferences";
 import { moveItemInList } from "../../lib/drag-drop";
 import { requestJson } from "../app-dashboard/helpers";
+import type { ProjectEntity } from "../../../shared/contracts";
 import type { ProjectQuickAddPayload } from "../quick-add/project-quick-add";
 import type { SubprojectQuickAddPayload } from "../quick-add/subproject-quick-add";
 import type { MainProjectsPageCoreState } from "./content-core-state";
 import type { SubprojectWithTasks } from "./content-helpers";
 import { useMainProjectsPageProjectIconActions } from "./content-actions-projects-icon";
+import { addSkillSetTasksToProject } from "./content-actions-skill-add";
 
 interface ProjectActionsProps {
   state: MainProjectsPageCoreState;
@@ -54,20 +56,46 @@ export const useMainProjectsPageProjectActions = ({
   const iconActions = useMainProjectsPageProjectIconActions({ loadProjects, state });
 
   const handleQuickProjectCreate = async (payload: ProjectQuickAddPayload) => {
+    let project: ProjectEntity;
+
     try {
-      await requestJson("/api/projects", {
+      project = await requestJson<ProjectEntity>("/api/projects", {
         body: JSON.stringify({
-          metadata: payload.metadata || undefined,
           name: payload.name,
           path: payload.path,
         }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       });
-      await loadProjects();
-      toast.success("Project created");
     } catch (error) {
       state.setErrorMessage(error instanceof Error ? error.message : "Failed to create project");
+      return;
+    }
+
+    const selectedInstructionSetId = payload.skillSetId?.trim() ?? "";
+    let createdSkillTaskCount = 0;
+
+    if (selectedInstructionSetId) {
+      try {
+        createdSkillTaskCount = await addSkillSetTasksToProject({
+          instructionSetId: selectedInstructionSetId,
+          instructionSets: state.instructionSets,
+          projectId: project.id,
+        });
+      } catch (error) {
+        await loadProjects();
+        const message =
+          error instanceof Error ? error.message : "Failed to add selected skill set tasks";
+        state.setErrorMessage(`Project created but skill set tasks were not added: ${message}`);
+        return;
+      }
+    }
+
+    await loadProjects();
+    if (createdSkillTaskCount > 0) {
+      toast.success(`Project created with ${createdSkillTaskCount} skill task(s)`);
+    } else {
+      toast.success("Project created");
     }
   };
 

@@ -70,3 +70,31 @@ test("resolveProjectPngIconPath falls back to app icon when public icons are abs
     assert.equal(iconPath, path.join(projectDir, "app", "icon.png"));
   });
 });
+
+test("resolveProjectPngIconPath resolves iOS AppIcon from first-level Xcode app directory", async () => {
+  await withTempProjectDir(async (projectDir) => {
+    const appIconSetDir = path.join(
+      projectDir,
+      "CompressVideoToTargetSize",
+      "Assets.xcassets",
+      "AppIcon.appiconset",
+    );
+    await mkdir(appIconSetDir, { recursive: true });
+    await writeFile(path.join(appIconSetDir, "appicon-180.png"), "180");
+
+    const iconPath = await resolveProjectPngIconPath(projectDir);
+    assert.equal(iconPath, path.join(appIconSetDir, "appicon-180.png"));
+  });
+});
+
+test("resolveProjectPngIconPath prefers 1024 icon inside iOS AppIcon set", async () => {
+  await withTempProjectDir(async (projectDir) => {
+    const appIconSetDir = path.join(projectDir, "AwesomeApp", "Assets.xcassets", "AppIcon.appiconset");
+    await mkdir(appIconSetDir, { recursive: true });
+    await writeFile(path.join(appIconSetDir, "appicon-180.png"), "180");
+    await writeFile(path.join(appIconSetDir, "appicon-1024.png"), "1024");
+
+    const iconPath = await resolveProjectPngIconPath(projectDir);
+    assert.equal(iconPath, path.join(appIconSetDir, "appicon-1024.png"));
+  });
+});

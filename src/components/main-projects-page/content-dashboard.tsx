@@ -34,6 +34,7 @@ export const MainProjectsPageDashboard = ({ controller }: MainProjectsPageDashbo
     hasLoadedOnce,
     loading,
     projects,
+    sortedInstructionSets,
     projectIconPickerProjectId,
     setProjectIconPickerProjectId,
     handleProjectIconUpload,
@@ -152,7 +153,8 @@ export const MainProjectsPageDashboard = ({ controller }: MainProjectsPageDashbo
         <ProjectQuickAdd
           onError={(message) => setErrorMessage(message)}
           onSubmit={handleQuickProjectCreate}
-          placeholder="Create project"
+          placeholder="Project path"
+          skillSets={sortedInstructionSets}
           submitAriaLabel="Create project"
           submitTitle="Create project"
         />

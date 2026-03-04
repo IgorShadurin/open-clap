@@ -292,6 +292,7 @@ export async function createProject(input: {
       metadata: parseMetadata(input.metadata),
       name: input.name,
       path: input.path,
+      paused: true,
       priority,
     },
   });
