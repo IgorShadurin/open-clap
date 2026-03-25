@@ -15,8 +15,10 @@ import type {
 } from "../../shared/contracts";
 
 export interface DaemonCodexUsageState {
+  allowed?: boolean;
   fiveHourUsedPercent: number;
   models?: CodexUsageModelSummary[];
+  weeklyUsedPercent?: number | null;
 }
 
 export interface DaemonApiClient {
@@ -148,8 +150,10 @@ export class HttpDaemonApiClient implements DaemonApiClient {
       results?: Array<{
         ok: boolean;
         usage?: {
+          allowed?: boolean;
           fiveHourUsedPercent?: number;
           models?: CodexUsageModelSummary[];
+          weeklyUsedPercent?: number | null;
         };
       }>;
     };
@@ -158,10 +162,23 @@ export class HttpDaemonApiClient implements DaemonApiClient {
       return null;
     }
 
-    return {
+    const usageState: DaemonCodexUsageState = {
       fiveHourUsedPercent: first.usage.fiveHourUsedPercent,
-      ...(Array.isArray(first.usage.models) ? { models: first.usage.models } : {}),
     };
+    if (typeof first.usage.allowed === "boolean") {
+      usageState.allowed = first.usage.allowed;
+    }
+    if (
+      first.usage.weeklyUsedPercent === null ||
+      typeof first.usage.weeklyUsedPercent === "number"
+    ) {
+      usageState.weeklyUsedPercent = first.usage.weeklyUsedPercent;
+    }
+    if (Array.isArray(first.usage.models)) {
+      usageState.models = first.usage.models;
+    }
+
+    return usageState;
   }
 
   public async completeImmediateAction(actionId: string): Promise<void> {

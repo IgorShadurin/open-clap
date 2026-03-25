@@ -525,7 +525,9 @@ test("runTaskExecutionCycle pauses when all model-specific 5h limits are below 2
   assert.deepEqual(result, { fetched: 0, slotsRequested: 1, started: 0 });
   assert.deepEqual(apiClient.fetchCalls, []);
   assert.equal(
-    logs.some((log) => log.message.includes("5h model limits are below 2% for all available models")),
+    logs.some((log) =>
+      log.message.includes("model limits are below 2% or blocked for all available models")
+    ),
     true,
   );
 });

@@ -64,6 +64,8 @@ test("HttpDaemonApiClient uses /api/codex/usage without forceRefresh and parses 
       "application/json",
     );
     assert.equal(usage?.fiveHourUsedPercent, 10);
+    assert.equal(usage?.allowed, true);
+    assert.equal(usage?.weeklyUsedPercent, 20);
     assert.equal(usage?.models?.[0]?.model, "gpt-5.3-codex-spark");
   } finally {
     globalThis.fetch = originalFetch;

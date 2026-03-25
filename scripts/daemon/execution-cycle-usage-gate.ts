@@ -34,15 +34,30 @@ export interface SparkFallbackResolution {
   reasoning: string;
 }
 
-function computeRemainingFiveHourPercent(usage: {
-  fiveHourUsedPercent?: number;
-}): number | null {
-  const usedPercent = usage.fiveHourUsedPercent;
+interface ModelLimitState {
+  allowed: boolean;
+  fiveHourRemainingPercent: number | null;
+  weeklyRemainingPercent: number | null;
+}
+
+function computeRemainingPercent(usedPercent: number | null | undefined): number | null {
   if (typeof usedPercent !== "number" || !Number.isFinite(usedPercent)) {
     return null;
   }
 
   return Math.max(0, Math.min(100, 100 - usedPercent));
+}
+
+function computeRemainingFiveHourPercent(usage: {
+  fiveHourUsedPercent?: number;
+}): number | null {
+  return computeRemainingPercent(usage.fiveHourUsedPercent);
+}
+
+function computeRemainingWeeklyPercent(usage: {
+  weeklyUsedPercent?: number | null;
+}): number | null {
+  return computeRemainingPercent(usage.weeklyUsedPercent);
 }
 
 export function toCanonicalModelIdentifier(value: string | null | undefined): string {
@@ -66,12 +81,36 @@ export function isSparkModelIdentifier(modelId: string): boolean {
   return modelId.includes("spark");
 }
 
-function buildModelRemainingPercentMap(
+function mergeModelLimitState(previous: ModelLimitState, next: ModelLimitState): ModelLimitState {
+  const chooseLower = (a: number | null, b: number | null): number | null => {
+    if (a === null) {
+      return b;
+    }
+    if (b === null) {
+      return a;
+    }
+    return Math.min(a, b);
+  };
+
+  return {
+    allowed: previous.allowed && next.allowed,
+    fiveHourRemainingPercent: chooseLower(
+      previous.fiveHourRemainingPercent,
+      next.fiveHourRemainingPercent,
+    ),
+    weeklyRemainingPercent: chooseLower(
+      previous.weeklyRemainingPercent,
+      next.weeklyRemainingPercent,
+    ),
+  };
+}
+
+function buildModelLimitStateMap(
   usage: DaemonCodexUsageState | null,
-): Map<string, number> {
-  const remainingByModel = new Map<string, number>();
+): Map<string, ModelLimitState> {
+  const limitsByModel = new Map<string, ModelLimitState>();
   if (!usage?.models || usage.models.length < 1) {
-    return remainingByModel;
+    return limitsByModel;
   }
 
   for (const summary of usage.models) {
@@ -79,20 +118,69 @@ function buildModelRemainingPercentMap(
     if (!modelId) {
       continue;
     }
-    const remainingPercent = computeRemainingFiveHourPercent(summary);
-    if (remainingPercent === null) {
+
+    const nextState: ModelLimitState = {
+      allowed: summary.allowed !== false,
+      fiveHourRemainingPercent: computeRemainingFiveHourPercent(summary),
+      weeklyRemainingPercent: computeRemainingWeeklyPercent(summary),
+    };
+    const previousState = limitsByModel.get(modelId);
+    if (previousState) {
+      limitsByModel.set(modelId, mergeModelLimitState(previousState, nextState));
       continue;
     }
-    remainingByModel.set(modelId, remainingPercent);
+    limitsByModel.set(modelId, nextState);
   }
 
-  return remainingByModel;
+  return limitsByModel;
 }
 
-function resolveFallbackModelRemainingPercent(
-  remainingByModel: Map<string, number>,
-): number | undefined {
-  return remainingByModel.get(SPARK_FALLBACK_MODEL);
+function countKnownModels(usage: DaemonCodexUsageState | null): number {
+  if (!Array.isArray(usage?.models)) {
+    return 0;
+  }
+
+  const modelSet = new Set<string>();
+  for (const summary of usage.models) {
+    const modelId = toCanonicalModelIdentifier(summary.model);
+    if (modelId) {
+      modelSet.add(modelId);
+    }
+  }
+
+  return modelSet.size;
+}
+
+function resolveFallbackModelLimitState(
+  limitsByModel: Map<string, ModelLimitState>,
+): ModelLimitState | undefined {
+  return limitsByModel.get(SPARK_FALLBACK_MODEL);
+}
+
+function isBelowRemainingThreshold(remainingPercent: number | null): boolean {
+  return remainingPercent !== null && remainingPercent < FIVE_HOUR_MIN_REMAINING_PERCENT;
+}
+
+function isModelExecutionBlocked(limitState: ModelLimitState): boolean {
+  if (!limitState.allowed) {
+    return true;
+  }
+
+  return (
+    isBelowRemainingThreshold(limitState.fiveHourRemainingPercent) ||
+    isBelowRemainingThreshold(limitState.weeklyRemainingPercent)
+  );
+}
+
+function canExecuteWithCurrentLimitState(limitState: ModelLimitState | undefined): boolean {
+  if (!limitState || !limitState.allowed) {
+    return false;
+  }
+
+  return (
+    !isBelowRemainingThreshold(limitState.fiveHourRemainingPercent) &&
+    !isBelowRemainingThreshold(limitState.weeklyRemainingPercent)
+  );
 }
 
 function resolveRetryPolicy(retryOptions: FiveHourUsageRetryOptions): {
@@ -152,23 +240,17 @@ export function resolveSparkTaskExecutionModel(
     };
   }
 
-  const remainingByModel = buildModelRemainingPercentMap(usage);
-  const sparkRemainingPercent = remainingByModel.get(normalizedTaskModel);
-  if (
-    sparkRemainingPercent === undefined ||
-    sparkRemainingPercent >= FIVE_HOUR_MIN_REMAINING_PERCENT
-  ) {
+  const limitsByModel = buildModelLimitStateMap(usage);
+  const sparkLimitState = limitsByModel.get(normalizedTaskModel);
+  if (!sparkLimitState || !isModelExecutionBlocked(sparkLimitState)) {
     return {
       model: originalModel,
       reasoning: originalReasoning,
     };
   }
 
-  const codexRemainingPercent = resolveFallbackModelRemainingPercent(remainingByModel);
-  if (
-    codexRemainingPercent === undefined ||
-    codexRemainingPercent < FIVE_HOUR_MIN_REMAINING_PERCENT
-  ) {
+  const codexLimitState = resolveFallbackModelLimitState(limitsByModel);
+  if (!canExecuteWithCurrentLimitState(codexLimitState)) {
     return {
       model: originalModel,
       reasoning: originalReasoning,
@@ -188,14 +270,14 @@ function collectDisallowedModelsFromUsage(usage: DaemonCodexUsageState): string[
     return [];
   }
 
-  const remainingByModel = buildModelRemainingPercentMap(usage);
-  const codexRemainingPercent = resolveFallbackModelRemainingPercent(remainingByModel);
-  const canFallbackSparkToCodex = codexRemainingPercent !== undefined &&
-    codexRemainingPercent >= FIVE_HOUR_MIN_REMAINING_PERCENT;
+  const limitsByModel = buildModelLimitStateMap(usage);
+  const canFallbackSparkToCodex = canExecuteWithCurrentLimitState(
+    resolveFallbackModelLimitState(limitsByModel),
+  );
 
   const disallowed = new Set<string>();
-  for (const [modelId, remainingPercent] of remainingByModel.entries()) {
-    if (remainingPercent >= FIVE_HOUR_MIN_REMAINING_PERCENT) {
+  for (const [modelId, limitState] of limitsByModel.entries()) {
+    if (!isModelExecutionBlocked(limitState)) {
       continue;
     }
     if (isSparkModelIdentifier(modelId) && canFallbackSparkToCodex) {
@@ -216,21 +298,30 @@ export async function shouldAllowExecutionBasedOnFiveHourUsage(
 
   try {
     const usage = await fetchFiveHourUsageStateWithRetry(apiClient, retryOptions);
-    const remainingPercent = computeRemainingFiveHourPercent(usage);
-    if (remainingPercent === null) {
+    const fiveHourRemainingPercent = computeRemainingFiveHourPercent(usage);
+    if (fiveHourRemainingPercent === null) {
       logger.log(
         "waiting",
         `Execution paused: 5h usage values are invalid after ${attempts} attempts`,
       );
       return { allowClaiming: false, disallowedModels: [] };
     }
+    if (usage.allowed === false) {
+      logger.log(
+        "waiting",
+        "Execution paused: Codex usage reports limits exhausted or unavailable allowance",
+      );
+      return { allowClaiming: false, disallowedModels: [] };
+    }
+
+    const weeklyRemainingPercent = computeRemainingWeeklyPercent(usage);
 
     const disallowedModels = collectDisallowedModelsFromUsage(usage);
-    const modelCount = usage.models?.length ?? 0;
+    const modelCount = countKnownModels(usage);
     if (disallowedModels.length > 0 && modelCount > 0 && disallowedModels.length >= modelCount) {
       logger.log(
         "waiting",
-        "Execution paused: 5h model limits are below 2% for all available models",
+        "Execution paused: model limits are below 2% or blocked for all available models",
       );
       return {
         allowClaiming: false,
@@ -238,10 +329,21 @@ export async function shouldAllowExecutionBasedOnFiveHourUsage(
       };
     }
 
-    if (modelCount < 1 && remainingPercent < FIVE_HOUR_MIN_REMAINING_PERCENT) {
+    if (modelCount < 1 && fiveHourRemainingPercent < FIVE_HOUR_MIN_REMAINING_PERCENT) {
       logger.log(
         "waiting",
-        `Execution paused: 5h limit remaining ${remainingPercent.toFixed(1)}%`,
+        `Execution paused: 5h limit remaining ${fiveHourRemainingPercent.toFixed(1)}%`,
+      );
+      return { allowClaiming: false, disallowedModels: [] };
+    }
+    if (
+      modelCount < 1 &&
+      weeklyRemainingPercent !== null &&
+      weeklyRemainingPercent < FIVE_HOUR_MIN_REMAINING_PERCENT
+    ) {
+      logger.log(
+        "waiting",
+        `Execution paused: weekly limit remaining ${weeklyRemainingPercent.toFixed(1)}%`,
       );
       return { allowClaiming: false, disallowedModels: [] };
     }
