@@ -4,6 +4,10 @@ import net from "node:net";
 import tls from "node:tls";
 import zlib from "node:zlib";
 import type { CodexUsageModelSummary } from "../../shared/contracts";
+import {
+  normalizeCodexUsageModelName,
+  toCanonicalCodexModelId,
+} from "../../shared/logic/codex-models";
 
 export type CodexUsageWindow = {
   used_percent?: number;
@@ -153,30 +157,8 @@ function normalizeModelSummary(summary: CodexUsageModelSummary): CodexUsageModel
   };
 }
 
-function toCanonicalModelIdentifier(value: string | null | undefined): string {
-  if (!value) {
-    return "";
-  }
-
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_]+/g, "-")
-    .replace(/-+/g, "-");
-}
-
-const USAGE_MODEL_CANONICAL_ALIASES: Readonly<Record<string, string>> = {
-  "codex-bengalfox": "gpt-5.3-codex-spark",
-  default: "gpt-5.3-codex",
-};
-
 function normalizeUsageModelName(value: string | null | undefined): string {
-  const canonical = toCanonicalModelIdentifier(value);
-  if (!canonical) {
-    return "";
-  }
-
-  return USAGE_MODEL_CANONICAL_ALIASES[canonical] ?? canonical;
+  return normalizeCodexUsageModelName(value);
 }
 
 function normalizeUsageModelLabel(value: string | null | undefined): string | undefined {
@@ -347,7 +329,7 @@ function parseAdditionalRateLimitEntries(
       modelLabel,
     };
 
-    const dedupeKey = toCanonicalModelIdentifier(summary.model);
+    const dedupeKey = toCanonicalCodexModelId(summary.model);
     if (!dedupeKey) {
       continue;
     }

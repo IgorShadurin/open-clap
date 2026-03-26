@@ -1,17 +1,13 @@
 import { TaskStatus, type Prisma } from "@prisma/client";
 
 import type { DaemonTask } from "../../shared/contracts/task";
+import { toCanonicalCodexModelId } from "../../shared/logic/codex-models";
 import { buildHistoryBundle, selectRecentMessages } from "./task-history";
 import { prisma } from "./prisma";
 import { extractListIdsFromText } from "./list-tokens";
 
 const MAX_FETCH_LIMIT = 20;
 const MIN_FETCH_LIMIT = 1;
-const MODEL_CANONICAL_ALIASES: Readonly<Record<string, string>> = {
-  "codex-bengalfox": "gpt-5.3-codex-spark",
-  default: "gpt-5.3-codex",
-};
-
 type TaskWithContext = Prisma.TaskGetPayload<{
   include: {
     project: {
@@ -36,16 +32,7 @@ function clampLimit(limit: number): number {
 }
 
 function toCanonicalModelIdentifier(value: string): string {
-  const canonical = value
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_]+/g, "-")
-    .replace(/-+/g, "-");
-  if (!canonical) {
-    return "";
-  }
-
-  return MODEL_CANONICAL_ALIASES[canonical] ?? canonical;
+  return toCanonicalCodexModelId(value);
 }
 
 function normalizeDisallowedModels(models: string[] | undefined): string[] {

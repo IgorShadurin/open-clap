@@ -47,6 +47,9 @@ function toModel(value: unknown): string {
   }
 
   const normalized = value.trim();
+  if (normalized === "gpt-5.3-codex-spark") {
+    return "gpt-5.3-codex";
+  }
   return normalized.length > 0 ? normalized : DEFAULT_TASK_FORM_PREFERENCES.model;
 }
 

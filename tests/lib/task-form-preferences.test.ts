@@ -125,3 +125,26 @@ test("clearTaskFormPreferences removes only the requested project key", () => {
     reasoning: "low",
   });
 });
+
+test("loadTaskFormPreferences migrates spark model preference to codex", () => {
+  const storage = createMemoryStorage();
+  const storageKey = getTaskFormPreferencesStorageKey("project-alpha");
+  assert.ok(storageKey);
+
+  storage.setItem(
+    storageKey,
+    JSON.stringify({
+      contextCount: 1,
+      includeContext: true,
+      model: "gpt-5.3-codex-spark",
+      reasoning: "medium",
+    }),
+  );
+
+  assert.deepEqual(loadTaskFormPreferences("project-alpha", storage), {
+    contextCount: 1,
+    includeContext: true,
+    model: "gpt-5.3-codex",
+    reasoning: "medium",
+  });
+});

@@ -1,16 +1,16 @@
 import type { DaemonApiClient, DaemonCodexUsageState } from "./api-client";
 import type { LogStatus } from "./logger";
+import {
+  DEFAULT_CODEX_MODEL,
+  isSparkCodexModel,
+  toCanonicalCodexModelId,
+} from "../../shared/logic/codex-models";
 import { DAEMON_RETRY_POLICY, retryAsync } from "./retry";
 import type { WaitFunction } from "./retry";
 
 export const FIVE_HOUR_MIN_REMAINING_PERCENT = 2;
-export const SPARK_FALLBACK_MODEL = "gpt-5.3-codex";
+export const SPARK_FALLBACK_MODEL = DEFAULT_CODEX_MODEL;
 export const SPARK_FALLBACK_REASONING = "medium";
-
-const MODEL_USAGE_CANONICAL_ALIASES: Readonly<Record<string, string>> = {
-  "codex-bengalfox": "gpt-5.3-codex-spark",
-  default: "gpt-5.3-codex",
-};
 
 interface LoggerLike {
   log: (status: LogStatus, message: string) => void;
@@ -61,24 +61,11 @@ function computeRemainingWeeklyPercent(usage: {
 }
 
 export function toCanonicalModelIdentifier(value: string | null | undefined): string {
-  if (!value) {
-    return "";
-  }
-
-  const canonical = value
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_]+/g, "-")
-    .replace(/-+/g, "-");
-  if (!canonical) {
-    return "";
-  }
-
-  return MODEL_USAGE_CANONICAL_ALIASES[canonical] ?? canonical;
+  return toCanonicalCodexModelId(value);
 }
 
 export function isSparkModelIdentifier(modelId: string): boolean {
-  return modelId.includes("spark");
+  return isSparkCodexModel(modelId);
 }
 
 function mergeModelLimitState(previous: ModelLimitState, next: ModelLimitState): ModelLimitState {
