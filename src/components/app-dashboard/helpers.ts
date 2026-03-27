@@ -1,4 +1,5 @@
 import type { TaskEntity } from "../../../shared/contracts";
+import { canEditTaskEntity } from "../../../shared/logic/task-lock";
 
 interface ApiErrorPayload {
   details?: string;
@@ -14,7 +15,7 @@ export function buildTaskScopeHref(
 }
 
 export function canEditTask(task: Pick<TaskEntity, "editLocked" | "status">): boolean {
-  return !task.editLocked && task.status !== "in_progress";
+  return canEditTaskEntity(task);
 }
 
 export function extractApiErrorMessage(

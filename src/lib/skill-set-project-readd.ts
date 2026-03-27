@@ -1,6 +1,7 @@
 import { Prisma, TaskStatus } from "@prisma/client";
 
 import type { SkillSetProjectReAddResult } from "../../shared/contracts";
+import { isTaskExecutionLocked } from "../../shared/logic/task-lock";
 import { publishAppSync } from "./live-sync";
 import { assertTaskTextListReferencesExist } from "./lists-service";
 import { prisma } from "./prisma";
@@ -88,9 +89,7 @@ export async function reAddSkillSetTasksToProject(
     return metadata?.instructionSetId === instructionSetId;
   });
 
-  const lockedTaskExists = tasksToReplace.some(
-    (task) => task.editLocked || task.status === TaskStatus.in_progress,
-  );
+  const lockedTaskExists = tasksToReplace.some((task) => isTaskExecutionLocked(task));
   if (lockedTaskExists) {
     throw new Error("Running tasks cannot be edited");
   }

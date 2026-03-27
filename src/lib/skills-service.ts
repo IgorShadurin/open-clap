@@ -5,6 +5,7 @@ import type {
   InstructionSetTreeItem,
   InstructionTaskEntity,
 } from "../../shared/contracts";
+import { canEditTaskEntity } from "../../shared/logic/task-lock";
 import {
   type SkillTaskLinkMetadata,
   buildSkillTaskMetadata,
@@ -627,10 +628,7 @@ export async function updateInstructionTask(
     task.id,
   );
   const syncTargets = taskLinks.filter(
-    (link) =>
-      shouldSyncFromSkillTask(link.metadata) &&
-      !link.editLocked &&
-      link.status !== TaskStatus.in_progress,
+    (link) => shouldSyncFromSkillTask(link.metadata) && canEditTaskEntity(link),
   );
 
   for (const syncTarget of syncTargets) {
@@ -671,10 +669,7 @@ export async function deleteInstructionTask(instructionTaskId: string): Promise<
   );
 
   const removeTargets = taskLinks.filter(
-    (link) =>
-      shouldSyncFromSkillTask(link.metadata) &&
-      !link.editLocked &&
-      link.status !== TaskStatus.in_progress,
+    (link) => shouldSyncFromSkillTask(link.metadata) && canEditTaskEntity(link),
   );
   const removeIds = removeTargets.map((link) => link.id);
 

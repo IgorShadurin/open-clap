@@ -6,6 +6,7 @@ import type {
   SubprojectEntity,
   TaskEntity,
 } from "../../shared/contracts";
+import { isTaskExecutionLocked } from "../../shared/logic/task-lock";
 import { publishAppSync } from "./live-sync";
 import { DEFAULT_TASK_MODEL, DEFAULT_TASK_REASONING } from "./task-reasoning";
 import { normalizeUserPath, validatePathExists } from "./path-validation";
@@ -716,10 +717,7 @@ export async function updateTask(
     input.includePreviousContext !== undefined ||
     input.previousContextMessages !== undefined;
 
-  if (
-    editingFieldsTouched &&
-    (existing.editLocked || existing.status === TaskStatus.in_progress)
-  ) {
+  if (editingFieldsTouched && isTaskExecutionLocked(existing)) {
     throw new Error("Running tasks cannot be edited");
   }
 
@@ -804,7 +802,7 @@ export async function setTaskAction(
     throw new Error("Task not found");
   }
 
-  if (task.editLocked || task.status === TaskStatus.in_progress) {
+  if (isTaskExecutionLocked(task)) {
     const existingImmediateAction = await prisma.immediateAction.findFirst({
       select: { id: true },
       where: {
