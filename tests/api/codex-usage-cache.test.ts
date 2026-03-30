@@ -80,6 +80,57 @@ test("codex usage API returns cached payload when cache is fresh", async () => {
   assert.equal(payload.results[0]?.usage?.fiveHourUsedPercent, 12);
 });
 
+test("codex usage API resolves duplicate auth file inputs to one cache key", async () => {
+  await resetDatabase();
+  const authFile = "/tmp/codex-usage-cache-dedupe-auth.json";
+  const resolvedAuthFile = path.resolve(authFile);
+  const cacheKey = buildCacheKey({ authFiles: [resolvedAuthFile] });
+
+  await prisma.codexUsageCache.create({
+    data: {
+      cacheKey,
+      expiresAt: new Date(Date.now() + 60_000),
+      payload: {
+        results: [
+          {
+            authFile: resolvedAuthFile,
+            ok: true,
+            usage: {
+              allowed: true,
+              fiveHourResetAt: "n/a",
+              fiveHourUsedPercent: 3,
+              weeklyResetAt: "n/a",
+              weeklyUsedPercent: 5,
+            },
+          },
+        ],
+      },
+    },
+  });
+
+  const response = await codexUsagePost(
+    new Request("http://localhost/api/codex/usage", {
+      body: JSON.stringify({
+        authFile,
+        authFiles: [authFile, resolvedAuthFile],
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  const payload = (await response.json()) as {
+    results: Array<{
+      authFile: string;
+      ok: boolean;
+    }>;
+  };
+  assert.equal(payload.results.length, 1);
+  assert.equal(payload.results[0]?.ok, true);
+  assert.equal(payload.results[0]?.authFile, resolvedAuthFile);
+});
+
 test("codex usage API does not use stale cache when entry is expired", async () => {
   await resetDatabase();
   const authFile = "/tmp/codex-usage-cache-test-expired-auth.json";
@@ -127,4 +178,24 @@ test("codex usage API does not use stale cache when entry is expired", async () 
   assert.equal(payload.results[0]?.ok, false);
   assert.equal(payload.results[0]?.usage?.fiveHourUsedPercent, undefined);
   assert.equal(typeof payload.results[0]?.error, "string");
+});
+
+test("codex usage API rejects non-positive timeout values", async () => {
+  const response = await codexUsagePost(
+    new Request("http://localhost/api/codex/usage", {
+      body: JSON.stringify({
+        authFile: "/tmp/codex-usage-invalid-timeout.json",
+        timeoutMs: 0,
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    }),
+  );
+
+  assert.equal(response.status, 400);
+  const payload = (await response.json()) as {
+    error?: { code?: string; message?: string };
+  };
+  assert.equal(payload.error?.code, "INVALID_PAYLOAD");
+  assert.equal(payload.error?.message, "Field `timeoutMs` must be a positive number");
 });

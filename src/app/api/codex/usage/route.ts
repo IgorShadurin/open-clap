@@ -31,21 +31,64 @@ interface CodexUsageCachePayload {
   results: CodexUsageApiResult[];
 }
 
+function normalizeNonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
 function normalizeAuthFiles(body: CodexUsageRequestBody): string[] {
-  const list: string[] = [];
-  if (typeof body.authFile === "string" && body.authFile.trim().length > 0) {
-    list.push(body.authFile.trim());
+  const list = new Set<string>();
+  const primaryAuthFile = normalizeNonEmptyString(body.authFile);
+  if (primaryAuthFile) {
+    list.add(primaryAuthFile);
   }
 
   if (Array.isArray(body.authFiles)) {
     for (const item of body.authFiles) {
-      if (typeof item === "string" && item.trim().length > 0) {
-        list.push(item.trim());
+      const normalized = normalizeNonEmptyString(item);
+      if (normalized) {
+        list.add(normalized);
       }
     }
   }
 
-  return [...new Set(list)];
+  return [...list];
+}
+
+function normalizeTimeoutMs(value: unknown): number | null {
+  if (value === undefined) {
+    return codexUsage.DEFAULT_CODEX_USAGE_TIMEOUT_MS;
+  }
+
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  return Math.floor(value);
+}
+
+function resolveAuthFilePaths(authFiles: string[]): string[] {
+  const resolved = new Set<string>();
+  for (const authFile of authFiles) {
+    try {
+      resolved.add(codexUsage.resolveAuthFilePath(authFile));
+    } catch {
+      resolved.add(path.resolve(authFile));
+    }
+  }
+
+  return [...resolved];
+}
+
+function sanitizeCodexUsageErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  return raw
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer [redacted]")
+    .replace(/("?(?:access_token|refresh_token|authorization)"?\s*[:=]\s*"?)[^",\s}]+/gi, "$1[redacted]");
 }
 
 function buildCacheKey(input: {
@@ -129,7 +172,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     }
   }
 
-  const directProxy = typeof body.proxy === "string" ? body.proxy.trim() : "";
+  const directProxy = normalizeNonEmptyString(body.proxy) ?? "";
   let settingsProxyEnabled = false;
   let settingsProxyUrl = "";
   try {
@@ -159,29 +202,16 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  if (
-    body.timeoutMs !== undefined &&
-    (!Number.isFinite(body.timeoutMs) || body.timeoutMs <= 0)
-  ) {
+  const timeoutMs = normalizeTimeoutMs(body.timeoutMs);
+  if (timeoutMs === null) {
     return NextResponse.json<ApiErrorShape>(
       createApiError("INVALID_PAYLOAD", "Field `timeoutMs` must be a positive number"),
       { status: 400 },
     );
   }
 
-  const timeoutMs = body.timeoutMs ?? codexUsage.DEFAULT_CODEX_USAGE_TIMEOUT_MS;
-  const endpoint =
-    typeof body.endpoint === "string" && body.endpoint.trim().length > 0
-      ? body.endpoint.trim()
-      : undefined;
-
-  const resolvedAuthFiles = authFiles.map((authFile) => {
-    try {
-      return codexUsage.resolveAuthFilePath(authFile);
-    } catch {
-      return path.resolve(authFile);
-    }
-  });
+  const endpoint = normalizeNonEmptyString(body.endpoint) ?? undefined;
+  const resolvedAuthFiles = resolveAuthFilePaths(authFiles);
 
   const cacheKey = buildCacheKey({
     authFiles: resolvedAuthFiles,
@@ -226,7 +256,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     } catch (error) {
       results.push({
         authFile: authFilePath,
-        error: error instanceof Error ? error.message : String(error),
+        error: sanitizeCodexUsageErrorMessage(error),
         ok: false,
       });
     }
