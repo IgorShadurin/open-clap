@@ -93,3 +93,10 @@ npm run prisma:migrate:dev -- --name <feature_name>
 ```bash
 npm run prisma:generate
 ```
+
+### Maintenance Workflow
+
+- Run `npm run lint` before targeted tests and before the full suite.
+- Use focused tests for the area you changed, then run `npm test`.
+- Running tasks stay non-editable across UI and server flows.
+- Current model policy and the existing spark fast path are documented in [docs/CODEX_MODEL_POLICY.md](docs/CODEX_MODEL_POLICY.md).
